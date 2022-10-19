@@ -26,6 +26,7 @@ class VPGBuffer:
         self.logp_buf = np.zeros(size, dtype=np.float32)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
+        self.n_trajectories = 0
 
     def store(self, obs, act, rew, val, logp):
         """
@@ -68,19 +69,23 @@ class VPGBuffer:
         
         self.path_start_idx = self.ptr
 
+        self.n_trajectories += 1
+
     def get(self):
         """
         Call this at the end of an epoch to get all of the data from
         the buffer, with advantages appropriately normalized (shifted to have
         mean zero and std one). Also, resets some pointers in the buffer.
         """
+        n_trajectories = float(self.n_trajectories)
+        self.n_trajectories = 0
         assert self.ptr == self.max_size    # buffer has to be full before you can get
         self.ptr, self.path_start_idx = 0, 0
         # the next two lines implement the advantage normalization trick
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf)
+                    adv=self.adv_buf, logp=self.logp_buf, n_trajectories=n_trajectories)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 
@@ -175,7 +180,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
             the current policy and value function.
 
     """
-
+    torch.set_printoptions(profile="full")
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     # setup_pytorch_for_mpi()
 
@@ -195,6 +200,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
 
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    print(ac)
 
     # Sync params across processes
     sync_params(ac)
@@ -209,11 +215,28 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
 
     # Set up function for computing VPG policy loss
     def compute_loss_pi(data):
-        pass
+        obs = data["obs"]
+        act = data["act"]
+        adv = data["adv"]
+        n_trajectories = data["n_trajectories"]
+        # print("adv", adv)
+        obs_len = len(obs)
+        dist = ac.pi._distribution(obs)
+        logp = ac.pi._log_prob_from_distribution(dist, act)
+        return (-1./n_trajectories) * torch.dot(logp, adv)
 
+
+    v_mse_loss = torch.nn.MSELoss()
     # Set up function for computing value loss
     def compute_loss_v(data):
-        pass
+        obs = data["obs"]
+        ret = data["ret"]
+
+        v_pred = torch.squeeze(ac.v.forward(obs))
+        # print("v_pred", v_pred)
+        # print("ret", ret)
+        # print(torch.stack([v_pred, ret], dim=1))
+        return v_mse_loss(v_pred, ret)
 
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
@@ -222,8 +245,23 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update():
-        pass
+    def update(data):
+        # print("before", [p.grad for p in ac.pi.parameters()])
+        # print("before", list(ac.pi.parameters()))
+        ac.pi.zero_grad()
+        pi_loss = compute_loss_pi(data)
+        pi_loss.backward()
+        pi_optimizer.step()
+        # print("after", [p.grad for p in ac.pi.parameters()])
+        # print("after", list(ac.pi.parameters()))
+        # print("before", list(ac.v.parameters()))
+        ac.v.zero_grad()
+        v_loss = compute_loss_v(data)
+        v_loss.backward()
+        vf_optimizer.step()
+        # print("losses", pi_loss, v_loss)
+        # print("after", list(ac.v.parameters()))
+        logger.store(LossPi=pi_loss, LossV=v_loss)
 
     # Prepare for interaction with environment
     start_time = time.time()
@@ -233,11 +271,14 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+    # for epoch in range(1):
         logger.store(Epoch=epoch)
         for t in range(local_steps_per_epoch):
+        # for t in range(1):
             act, val, logp = ac.step(obs)
+            logger.store(VVals=val)
             obs, rew, done, info = env.step(act)
-            ep_ret += 1
+            ep_ret += rew
             ep_len += 1
             buf.store(obs, act, rew, val, logp)
 
@@ -261,21 +302,18 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
             logger.save_state({'env': env}, None)
 
         epoch_data = buf.get()
-        print("epoch_data", epoch_data)
-        print("local_steps_per_epoch", local_steps_per_epoch)
-        for k, v in epoch_data.items():
-            print(k, len(v))
+
         # perform VPG update!
-        update()
+        update(epoch_data)
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
-        # logger.log_tabular('VVals', with_min_and_max=True)
-        # logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-        # logger.log_tabular('LossPi', average_only=True)
-        # logger.log_tabular('LossV', average_only=True)
+        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('LossPi', average_only=True)
+        logger.log_tabular('LossV', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
         # logger.log_tabular('DeltaLossV', average_only=True)
         # logger.log_tabular('Entropy', average_only=True)

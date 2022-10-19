@@ -126,4 +126,4 @@ class MLPActorCritic(nn.Module):
 
     def act(self, obs):
         with torch.no_grad():
-            return self.pi.forward(obs).sample().numpy()
+            return self.pi._distribution(obs).sample().numpy()
