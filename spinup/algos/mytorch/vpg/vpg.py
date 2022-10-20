@@ -26,7 +26,6 @@ class VPGBuffer:
         self.logp_buf = np.zeros(size, dtype=np.float32)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
-        self.n_trajectories = 0
 
     def store(self, obs, act, rew, val, logp):
         """
@@ -69,23 +68,19 @@ class VPGBuffer:
         
         self.path_start_idx = self.ptr
 
-        self.n_trajectories += 1
-
     def get(self):
         """
         Call this at the end of an epoch to get all of the data from
         the buffer, with advantages appropriately normalized (shifted to have
         mean zero and std one). Also, resets some pointers in the buffer.
         """
-        n_trajectories = float(self.n_trajectories)
-        self.n_trajectories = 0
         assert self.ptr == self.max_size    # buffer has to be full before you can get
         self.ptr, self.path_start_idx = 0, 0
         # the next two lines implement the advantage normalization trick
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf, n_trajectories=n_trajectories)
+                    adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 
@@ -180,7 +175,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
             the current policy and value function.
 
     """
-    torch.set_printoptions(profile="full")
+    # torch.set_printoptions(profile="full")
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     # setup_pytorch_for_mpi()
 
@@ -218,12 +213,14 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         obs = data["obs"]
         act = data["act"]
         adv = data["adv"]
-        n_trajectories = data["n_trajectories"]
-        # print("adv", adv)
-        obs_len = len(obs)
-        dist = ac.pi._distribution(obs)
-        logp = ac.pi._log_prob_from_distribution(dist, act)
-        return (-1./n_trajectories) * torch.dot(logp, adv)
+        logp_old = data["logp"]
+        dist, logp = ac.pi(obs, act)
+
+        kl = (logp_old - logp).mean().item()
+        entropy = dist.entropy().mean().item()
+
+        logger.store(KL=kl, Entropy=entropy)
+        return -(logp * adv).mean()
 
 
     v_mse_loss = torch.nn.MSELoss()
@@ -232,11 +229,8 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         obs = data["obs"]
         ret = data["ret"]
 
-        v_pred = torch.squeeze(ac.v.forward(obs))
-        # print("v_pred", v_pred)
-        # print("ret", ret)
-        # print(torch.stack([v_pred, ret], dim=1))
-        return v_mse_loss(v_pred, ret)
+        v = torch.squeeze(ac.v(obs))
+        return v_mse_loss(v, ret)
 
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
@@ -246,38 +240,30 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
     logger.setup_pytorch_saver(ac)
 
     def update(data):
-        # print("before", [p.grad for p in ac.pi.parameters()])
-        # print("before", list(ac.pi.parameters()))
         ac.pi.zero_grad()
         pi_loss = compute_loss_pi(data)
         pi_loss.backward()
         pi_optimizer.step()
-        # print("after", [p.grad for p in ac.pi.parameters()])
-        # print("after", list(ac.pi.parameters()))
-        # print("before", list(ac.v.parameters()))
-        ac.v.zero_grad()
-        v_loss = compute_loss_v(data)
-        v_loss.backward()
-        vf_optimizer.step()
-        # print("losses", pi_loss, v_loss)
-        # print("after", list(ac.v.parameters()))
+
+        for _ in range(train_v_iters):
+            ac.v.zero_grad()
+            v_loss = compute_loss_v(data)
+            v_loss.backward()
+            vf_optimizer.step()
+
         logger.store(LossPi=pi_loss, LossV=v_loss)
 
     # Prepare for interaction with environment
     start_time = time.time()
     obs, ep_ret, ep_len = env.reset(), 0, 0
 
-    # TODO check the logic surround last_val, seems fishy that it can't just check the last value in the buffer
-
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
-    # for epoch in range(1):
         logger.store(Epoch=epoch)
         for t in range(local_steps_per_epoch):
-        # for t in range(1):
             act, val, logp = ac.step(obs)
             logger.store(VVals=val)
-            obs, rew, done, info = env.step(act)
+            obs, rew, done, _ = env.step(act)
             ep_ret += rew
             ep_len += 1
             buf.store(obs, act, rew, val, logp)
@@ -316,31 +302,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         logger.log_tabular('LossV', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
         # logger.log_tabular('DeltaLossV', average_only=True)
-        # logger.log_tabular('Entropy', average_only=True)
-        # logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('Entropy', average_only=True)
+        logger.log_tabular('KL', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
-
-# if __name__ == '__main__':
-#     import argparse
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('--env', type=str, default='HalfCheetah-v2')
-#     parser.add_argument('--hid', type=int, default=64)
-#     parser.add_argument('--l', type=int, default=2)
-#     parser.add_argument('--gamma', type=float, default=0.99)
-#     parser.add_argument('--seed', '-s', type=int, default=0)
-#     parser.add_argument('--cpu', type=int, default=4)
-#     parser.add_argument('--steps', type=int, default=4000)
-#     parser.add_argument('--epochs', type=int, default=50)
-#     parser.add_argument('--exp_name', type=str, default='vpg')
-#     args = parser.parse_args()
-
-#     mpi_fork(args.cpu)  # run parallel code with mpi
-
-#     from spinup.utils.run_utils import setup_logger_kwargs
-#     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
-
-#     vpg(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
-#         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-#         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-#         logger_kwargs=logger_kwargs)
