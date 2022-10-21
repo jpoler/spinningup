@@ -192,7 +192,7 @@ if __name__ == '__main__':
     ExperimentGrid run routine to execute each possible experiment.
     """
 
-    print(os.environ["DISPLAY"])
+    print(os.environ.get("DISPLAY", None))
 
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'help'
     valid_algos = add_with_backends(BASE_ALGO_NAMES)
