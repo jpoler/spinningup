@@ -69,7 +69,6 @@ class MLPCategoricalActor(Actor):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
-        print(obs_dim, hidden_sizes, act_dim)
         self._mlp = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
     def _distribution(self, obs):
@@ -83,13 +82,18 @@ class MLPCategoricalActor(Actor):
 class MLPGaussianActor(Actor):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
-        pass
+        super().__init__()
+        self._loc_dim = torch.prod(torch.as_tensor(act_dim)).item()
+        log_scale = -0.5 * np.ones(self._loc_dim, dtype=np.float32)
+        self._log_scale = torch.nn.Parameter(torch.as_tensor(log_scale))
+        self._mlp = mlp([obs_dim] + list(hidden_sizes) + [self._loc_dim], activation)
 
     def _distribution(self, obs):
-        pass
+        loc = self._mlp(obs.float())
+        return Normal(loc, torch.exp(self._log_scale))
 
     def _log_prob_from_distribution(self, pi, act):
-        pass
+        return pi.log_prob(act).sum(axis=-1)
 
 
 class MLPCritic(nn.Module):
@@ -111,8 +115,11 @@ class MLPActorCritic(nn.Module):
         self._obs_dim = observation_space.shape[0]
         if isinstance(action_space, Discrete):
             self._act_dim = action_space.n
+            self.pi = MLPCategoricalActor(self._obs_dim, self._act_dim, hidden_sizes, activation)
+        elif isinstance(action_space, Box):
+            self._act_dim = action_space.shape
+            self.pi = MLPGaussianActor(self._obs_dim, self._act_dim, hidden_sizes, activation)
 
-        self.pi = MLPCategoricalActor(self._obs_dim, self._act_dim, hidden_sizes, activation)
         self.v = MLPCritic(self._obs_dim, hidden_sizes, activation)
 
     def step(self, obs):
@@ -121,7 +128,7 @@ class MLPActorCritic(nn.Module):
             dist = self.pi._distribution(obs)
             act = dist.sample()
             logp = self.pi._log_prob_from_distribution(dist, act)
-            val = self.v.forward(obs)
+            val = self.v(obs)
         return act.numpy(), val.numpy(), logp.numpy()
 
     def act(self, obs):

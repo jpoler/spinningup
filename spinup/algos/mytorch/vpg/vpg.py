@@ -214,6 +214,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         act = data["act"]
         adv = data["adv"]
         logp_old = data["logp"]
+
         dist, logp = ac.pi(obs, act)
 
         kl = (logp_old - logp).mean().item()
@@ -243,15 +244,23 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         ac.pi.zero_grad()
         pi_loss = compute_loss_pi(data)
         pi_loss.backward()
+        pi_grad_norm = 0
+        for p in ac.pi.parameters():
+            pi_grad_norm += torch.norm(p.grad)
         pi_optimizer.step()
 
+        v_grad_norm = 0
         for _ in range(train_v_iters):
             ac.v.zero_grad()
             v_loss = compute_loss_v(data)
             v_loss.backward()
+            for p in ac.v.parameters():
+                v_grad_norm += torch.norm(p.grad)
             vf_optimizer.step()
 
-        logger.store(LossPi=pi_loss, LossV=v_loss)
+        v_grad_norm /= float(train_v_iters)
+
+        logger.store(LossPi=pi_loss, LossV=v_loss, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm)
 
     # Prepare for interaction with environment
     start_time = time.time()
@@ -262,7 +271,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         logger.store(Epoch=epoch)
         for t in range(local_steps_per_epoch):
             act, val, logp = ac.step(obs)
-            logger.store(VVals=val)
+            logger.store(VVals=val, Act=act.item())
             obs, rew, done, _ = env.step(act)
             ep_ret += rew
             ep_len += 1
@@ -297,9 +306,12 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('Act', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
+        logger.log_tabular('GradNormPi', average_only=True)
+        logger.log_tabular('GradNormV', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
         # logger.log_tabular('DeltaLossV', average_only=True)
         logger.log_tabular('Entropy', average_only=True)
