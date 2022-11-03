@@ -3,7 +3,7 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import spinup.algos.mytorch.vpg.core as core
+import spinup.algos.mytorch.trpo.core as core
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
@@ -230,9 +230,9 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = VPGBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+    buf = TRPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
-    # Set up function for computing VPG policy loss
+    # Set up function for computing TRPO policy loss
     def compute_loss_pi(data):
         obs = data["obs"]
         act = data["act"]
@@ -334,7 +334,7 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         epoch_data = buf.get()
 
-        # perform VPG update!
+        # perform TRPO update!
         update(epoch_data)
 
         # Log info about epoch
