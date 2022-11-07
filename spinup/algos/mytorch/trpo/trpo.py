@@ -1,3 +1,4 @@
+from copy import deepcopy
 import numpy as np
 import torch
 from torch.optim import Adam
@@ -232,34 +233,6 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
     buf = TRPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
-    # Set up function for computing TRPO policy loss
-    def compute_loss_pi(data):
-        obs = data["obs"]
-        act = data["act"]
-        adv = data["adv"]
-        logp_old = data["logp"]
-
-        dist, logp = ac.pi(obs, act)
-
-        kl = (logp_old - logp).mean().item()
-        entropy = dist.entropy().mean().item()
-
-        logger.store(KL=kl, Entropy=entropy)
-        return -(logp * adv).mean()
-
-    def compute_surrogate_loss_pi(data):
-        pass
-
-    def compute_kl():
-        pass
-
-    def compute_average_kl():
-        pass
-
-    def compute_hessian_product(f, v):
-        pass
-
-
     v_mse_loss = torch.nn.MSELoss()
     # Set up function for computing value loss
     def compute_loss_v(data):
@@ -270,20 +243,31 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return v_mse_loss(v, ret)
 
     # Set up optimizers for policy and value function
-    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
     def update(data):
-        ac.pi.zero_grad()
-        pi_loss = compute_loss_pi(data)
-        pi_loss.backward()
-        pi_grad_norm = 0
-        for p in ac.pi.parameters():
-            pi_grad_norm += torch.norm(p.grad)
-        pi_optimizer.step()
+        obs = data["obs"]
+        act = data["act"]
+        adv = data["adv"]
+
+        actor_new = deepcopy(ac.pi)
+        with torch.no_grad():
+            _, logp_old = ac.pi(obs, act)
+        pi_new, logp_new = ac.pi(obs, act)
+        entropy = pi_new.entropy().mean().item()
+        pi_loss = core.surrogate_advantage(logp_old, logp_new, adv)
+        grads = torch.autograd.grad(pi_loss, ac.pi.parameters())
+        pi_loss_g = torch.nn.utils.parameters_to_vector(grads)
+        pi_grad_norm = torch.norm(pi_loss_g)
+        x_hat, x_hat_coeff = core.compute_direction(
+            obs, act, adv, pi_loss_g, ac.pi, actor_new, cg_iters, damping_coeff, delta)
+        d = x_hat_coeff * x_hat
+        d_norm = torch.norm(d)
+        ac.pi, average_kl, surrogate_advantage, backtrack_iters_actual = core.line_search(
+            obs, act, adv, d, backtrack_iters, backtrack_coeff, delta, ac.pi, actor_new)
 
         v_grad_norm = 0
         for _ in range(train_v_iters):
@@ -296,7 +280,7 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         v_grad_norm /= float(train_v_iters)
 
-        logger.store(LossPi=pi_loss, LossV=v_loss, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm)
+        logger.store(LossPi=pi_loss, LossV=v_loss, Entropy=entropy, GradNormV=v_grad_norm, GradNormPi=pi_grad_norm, DNorm=d_norm, AverageKL=average_kl, SurrogateAdvantage=surrogate_advantage, XHatCoefficient=x_hat_coeff, BacktrackIters=backtrack_iters_actual)
 
     # Prepare for interaction with environment
     start_time = time.time()
@@ -334,7 +318,6 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         epoch_data = buf.get()
 
-        # perform TRPO update!
         update(epoch_data)
 
         # Log info about epoch
@@ -348,9 +331,13 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('LossV', average_only=True)
         logger.log_tabular('GradNormPi', average_only=True)
         logger.log_tabular('GradNormV', average_only=True)
+        logger.log_tabular('DNorm', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
         # logger.log_tabular('DeltaLossV', average_only=True)
         logger.log_tabular('Entropy', average_only=True)
-        logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('AverageKL', average_only=True)
+        logger.log_tabular('SurrogateAdvantage', average_only=True)
+        logger.log_tabular('XHatCoefficient', average_only=True)
+        logger.log_tabular('BacktrackIters', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
