@@ -290,8 +290,12 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     for epoch in range(epochs):
         logger.store(Epoch=epoch)
         for t in range(local_steps_per_epoch):
+            if t % 10000 == 0:
+                print(f"\repoch: ({epoch + 1}/{epochs}) steps: ({t}/{local_steps_per_epoch})", end="")
+            if t == local_steps_per_epoch - 1:
+                print()
             act, val, logp = ac.step(obs)
-            logger.store(VVals=val, Act=act.item())
+            logger.store(VVals=val)
             obs, rew, done, _ = env.step(act)
             ep_ret += rew
             ep_len += 1
@@ -325,7 +329,6 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('Act', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
