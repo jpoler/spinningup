@@ -17,7 +17,6 @@ class Algorithm(ABC):
             self,
             env,
             buf,
-            ac,
             seed=0,
             steps_per_epoch=4000,
             epochs=50,
@@ -31,12 +30,8 @@ class Algorithm(ABC):
         self.logger = EpochLogger(**logger_kwargs)
 
         self.env = env
-        self.obs_dim = self.env.observation_space.shape
-        self.act_dim = self.env.action_space.shape
 
         self.buf = buf
-
-        self.ac = ac
 
         self.seed = seed + 10000 * proc_id()
         torch.manual_seed(self.seed)
@@ -57,6 +52,10 @@ class Algorithm(ABC):
 
     @abstractmethod
     def log_epoch(self):
+        pass
+
+    @abstractmethod
+    def act(self):
         pass
 
     def _log_epoch(self, epoch, start_time):
@@ -97,8 +96,8 @@ class Algorithm(ABC):
                     print(f"\repoch: ({epoch + 1}/{self.epochs}) steps: ({t}/{self.local_steps_per_epoch})", end="")
                 if t == self.local_steps_per_epoch - 1:
                     print()
-                act, val, logp = self.ac.step(obs)
-                # self.logger.store(VVals=val)
+                act, val, logp = self.act(obs)
+                self.logger.store(Vals=val)
                 obs, rew, done, _ = self.env.step(act)
                 ep_ret += rew
                 ep_len += 1
@@ -108,7 +107,7 @@ class Algorithm(ABC):
                 finished = done or truncated
 
                 if truncated:
-                    _, val, _ = self.ac.step(obs)
+                    _, val, _ = self.act(obs)
                     self.buf.finish_path(last_val=val)
                 elif done:
                     self.buf.finish_path()

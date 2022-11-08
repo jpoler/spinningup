@@ -29,10 +29,10 @@ class TRPOAlgorithm(Algorithm):
         env = env_fn()
         buf_size = int(kwargs["steps_per_epoch"] / num_procs())
         buf = GAEBuffer(env.observation_space.shape, env.action_space.shape, buf_size, gamma=gamma, lam=lam)
-        ac = core.MLPActorCritic(env.observation_space, env.action_space, **ac_kwargs)
-        super().__init__(env, buf, ac, **kwargs)
+        self.ac = core.MLPActorCritic(env.observation_space, env.action_space, **ac_kwargs)
+        super().__init__(env, buf, **kwargs)
         self.v_mse_loss = torch.nn.MSELoss()
-        self.vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+        self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
         self.gamma = gamma
         self.delta = delta
         self.vf_lr = vf_lr
@@ -45,7 +45,7 @@ class TRPOAlgorithm(Algorithm):
 
 
     def log_epoch(self):
-        # self.logger.log_tabular('VVals', with_min_and_max=True)
+        self.logger.log_tabular('Vals', with_min_and_max=True)
         self.logger.log_tabular('LossPi', average_only=True)
         self.logger.log_tabular('LossV', average_only=True)
         self.logger.log_tabular('GradNormPi', average_only=True)
@@ -58,6 +58,9 @@ class TRPOAlgorithm(Algorithm):
         self.logger.log_tabular('BacktrackIters', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
         # logger.log_tabular('DeltaLossV', average_only=True)
+
+    def act(self, obs):
+        return self.ac.step(obs)
 
     def update(self, data):
         obs = data["obs"]
