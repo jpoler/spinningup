@@ -6,6 +6,14 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 
+def average_kl(pi_old, pi_new):
+    kl = torch.distributions.kl.kl_divergence(pi_old, pi_new)
+    return kl.mean()
+
+def surrogate_advantage(logp_old, logp_new, adv):
+    ratio = torch.exp(logp_new - logp_old)
+    return (ratio * adv).mean()
+
 def conjugate_gradients(Ax, x, b, max_iters, eps):
     eps_squared = eps**2
     r = b - Ax(x)
@@ -30,14 +38,6 @@ def conjugate_gradients(Ax, x, b, max_iters, eps):
         d = r + beta * d
 
     return x
-
-def average_kl(pi_old, pi_new):
-    kl = torch.distributions.kl.kl_divergence(pi_old, pi_new)
-    return kl.mean()
-
-def surrogate_advantage(logp_old, logp_new, adv):
-    ratio = torch.exp(logp_new - logp_old)
-    return (ratio * adv).mean()
 
 def compute_direction(obs, act, adv, pi_loss_g, actor_old, actor_new, cg_iters,  damping_coeff, delta, eps=1e-8):
     pi_old, _ = actor_old(obs, act)
@@ -71,10 +71,3 @@ def line_search(obs, act, adv, d, backtrack_iters, backtrack_coeff, delta, actor
                 return actor_new, akl, surrogate_adv, i
 
     return actor_old, 0, 0, i
-
-
-
-
-
-
-
