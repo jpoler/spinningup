@@ -233,6 +233,8 @@ def trpo(
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
     """
+    ac_kwargs = ac_kwargs or {}
+    logger_kwargs = logger_kwargs or {}
 
     saved_config = locals()
 

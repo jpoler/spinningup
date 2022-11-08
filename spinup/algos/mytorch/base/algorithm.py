@@ -64,6 +64,7 @@ class Algorithm(ABC):
         self.logger.log_tabular('EpRet', with_min_and_max=True)
         self.logger.log_tabular('EpLen', average_only=True)
         self.logger.log_tabular('TotalEnvInteracts', (epoch+1)*self.steps_per_epoch)
+        self.logger.log_tabular('Vals', with_min_and_max=True)
         self.logger.log_tabular('Time', time.time()-start_time)
 
         self.log_epoch()
