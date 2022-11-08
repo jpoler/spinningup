@@ -20,6 +20,7 @@ from spinup.algos.pytorch.vpg.vpg import vpg as vpg_pytorch
 
 from spinup.algos.mytorch.vpg.vpg import vpg as vpg_mytorch
 from spinup.algos.mytorch.trpo.trpo import trpo as trpo_mytorch
+from spinup.algos.mytorch.ppo.ppo import ppo as ppo_mytorch
 
 # Loggers
 from spinup.utils.logx import Logger, EpochLogger
