@@ -1,19 +1,23 @@
 from copy import deepcopy
-import torch
-from torch.optim import Adam
-import gym
 import time
-import spinup.algos.mytorch.trpo.core as core
+
+from torch.optim import Adam
+import torch
+import gym
+
+from spinup.algos.mytorch.base.actor_critic import MLPActorCritic
 from spinup.algos.mytorch.base.algorithm import Algorithm
 from spinup.algos.mytorch.base.buffer import GAEBuffer
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+import spinup.algos.mytorch.trpo.core as core
 
 class TRPOAlgorithm(Algorithm):
     def __init__(
             self,
             env_fn,
+            actor_critic=MLPActorCritic,
             ac_kwargs=None,
             gamma=0.99,
             delta=0.01,
@@ -29,7 +33,7 @@ class TRPOAlgorithm(Algorithm):
         env = env_fn()
         buf_size = int(kwargs["steps_per_epoch"] / num_procs())
         buf = GAEBuffer(env.observation_space.shape, env.action_space.shape, buf_size, gamma=gamma, lam=lam)
-        self.ac = core.MLPActorCritic(env.observation_space, env.action_space, **ac_kwargs)
+        self.ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
         super().__init__(env, buf, **kwargs)
         self.v_mse_loss = torch.nn.MSELoss()
         self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
@@ -102,7 +106,7 @@ class TRPOAlgorithm(Algorithm):
 
 def trpo(
         env_fn,
-        actor_critic=core.MLPActorCritic,
+        actor_critic=MLPActorCritic,
         ac_kwargs=None,
         seed=0,
         steps_per_epoch=4000,
