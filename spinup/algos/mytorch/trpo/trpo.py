@@ -49,7 +49,6 @@ class TRPOAlgorithm(Algorithm):
 
 
     def log_epoch(self):
-        self.logger.log_tabular('Vals', with_min_and_max=True)
         self.logger.log_tabular('LossPi', average_only=True)
         self.logger.log_tabular('LossV', average_only=True)
         self.logger.log_tabular('GradNormPi', average_only=True)

@@ -24,6 +24,7 @@ class Algorithm(ABC):
             save_freq=10,
             logger_kwargs=None,
             saved_config=None,
+            status_freq=1000,
             **kwargs,
     ):
         self._logger_kwargs = logger_kwargs or {}
@@ -44,6 +45,8 @@ class Algorithm(ABC):
 
         self.saved_config = saved_config
         self.save_freq = save_freq
+
+        self.status_freq = status_freq
 
 
     @abstractmethod
@@ -93,16 +96,18 @@ class Algorithm(ABC):
         for epoch in range(self.epochs):
             self.logger.store(Epoch=epoch)
             for t in range(self.local_steps_per_epoch):
-                if t % 10000 == 0:
+                if t % self.status_freq == 0:
                     print(f"\repoch: ({epoch + 1}/{self.epochs}) steps: ({t}/{self.local_steps_per_epoch})", end="")
                 if t == self.local_steps_per_epoch - 1:
-                    print()
+                    print(f"\repoch: ({epoch + 1}/{self.epochs}) steps: ({t+1}/{self.local_steps_per_epoch})")
                 act, val, logp = self.act(obs)
                 self.logger.store(Vals=val)
-                obs, rew, done, _ = self.env.step(act)
+                next_obs, rew, done, _ = self.env.step(act)
                 ep_ret += rew
                 ep_len += 1
                 self.buf.store(obs, act, rew, val, logp)
+
+                obs = next_obs
 
                 truncated = (ep_len >= self.max_ep_len) or (t == self.local_steps_per_epoch - 1)
                 finished = done or truncated

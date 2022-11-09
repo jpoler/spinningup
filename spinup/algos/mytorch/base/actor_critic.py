@@ -45,7 +45,7 @@ class MLPCategoricalActor(Actor):
         self._mlp = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
     def _distribution(self, obs):
-        logits = self._mlp.forward(obs.float())
+        logits = self._mlp(obs.float())
         return Categorical(logits=logits)
 
     def _log_prob_from_distribution(self, pi, act):
@@ -76,7 +76,7 @@ class MLPCritic(nn.Module):
         self._mlp = mlp([obs_dim] + list(hidden_sizes) + [1], activation)
 
     def forward(self, obs):
-        return self._mlp.forward(obs.float())
+        return torch.squeeze(self._mlp(obs.float()), -1)
 
 class MLPActorCritic(nn.Module):
 

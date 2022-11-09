@@ -1,3 +1,4 @@
+from copy import deepcopy
 import time
 
 from torch.optim import Adam
@@ -33,6 +34,7 @@ class PPOAlgorithm(Algorithm):
         buf_size = int(kwargs["steps_per_epoch"] / num_procs())
         buf = GAEBuffer(env.observation_space.shape, env.action_space.shape, buf_size, gamma=gamma, lam=lam)
         self.ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+        print("ac", self.ac)
         super().__init__(env, buf, **kwargs)
         self.v_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
@@ -53,65 +55,86 @@ class PPOAlgorithm(Algorithm):
         self.logger.log_tabular('GradNormPi', average_only=True)
         self.logger.log_tabular('GradNormV', average_only=True)
         self.logger.log_tabular('Entropy', average_only=True)
+        self.logger.log_tabular('StopIter', average_only=True)
+        self.logger.log_tabular('KL', average_only=True)
+        self.logger.log_tabular('ClipFrac', average_only=True)
 
     def act(self, obs):
         return self.ac.step(obs)
 
-    def compute_loss_pi(self, data):
-        obs = data["obs"]
-        act = data["act"]
-        adv = data["adv"]
-        logp_old = data["logp"]
+    def average_kl(self, pi_old, pi_new):
+        kl = torch.distributions.kl.kl_divergence(pi_old, pi_new)
+        return kl.mean()
 
+    def compute_loss_pi(self, obs, act, adv, logp_old):
         pi_new, logp_new = self.ac.pi(obs, act)
         ratio = torch.exp(logp_new - logp_old)
-        surrogate_objective = ratio * adv
-        adv_clipped = torch.where(adv >= 0, (1+self.clip_ratio)*adv, (1-self.clip_ratio)*adv)
-        # pytorch 1.3.1 does not appear to have an elementwise minimum function
-        surrogate_objective_clipped = torch.where(
-            surrogate_objective <= adv_clipped,
-            surrogate_objective,
-            adv_clipped,
-        )
+        adv_clipped = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
+        surrogate_objective_clipped = -(torch.min(ratio * adv, adv_clipped)).mean()
 
+        clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
+        clip_frac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
 
         kl = (logp_old - logp_new).mean().item()
         entropy = pi_new.entropy().mean().item()
-        self.logger.store(KL=kl, Entropy=entropy)
+        self.logger.store(KL=kl, Entropy=entropy, ClipFrac=clip_frac)
 
-        return -surrogate_objective_clipped.mean()
+        return surrogate_objective_clipped
 
-    def compute_loss_v(self, data):
-        obs = data["obs"]
-        ret = data["ret"]
-
-        v = torch.squeeze(self.ac.v(obs))
+    def compute_loss_v(self, obs, ret):
+        v = self.ac.v(obs)
         return self.v_mse_loss(v, ret)
 
     def update(self, data):
-        pi_grad_norm = 0
-        for _ in range(self.train_pi_iters):
-            self.ac.pi.zero_grad()
-            pi_loss = self.compute_loss_pi(data)
+        obs = data["obs"]
+        act = data["act"]
+        ret = data["ret"]
+        adv = data["adv"]
+        logp_old = data["logp"]
+
+        actor_old = deepcopy(self.ac.pi)
+        with torch.no_grad():
+            pi_old, _ = actor_old(obs)
+
+        pi_grad_norms = []
+        pi_losses = []
+        for i in range(self.train_pi_iters):
+            self.pi_optimizer.zero_grad()
+            pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
+            pi_losses.append(pi_loss)
+
+            with torch.no_grad():
+                pi_new, _ = self.ac.pi(obs)
+            akl = self.average_kl(pi_old, pi_new)
+            if akl > 1.5*self.target_kl:
+                break
+
             pi_loss.backward()
             for p in self.ac.pi.parameters():
-                pi_grad_norm += torch.norm(p.grad)
+                pi_grad_norms.append(torch.norm(p.grad))
             self.pi_optimizer.step()
 
-        pi_grad_norm /= float(self.train_pi_iters)
+        pi_stop_iter = i
 
-        v_grad_norm = 0
+        pi_loss_total = sum(pi_losses) / float(len(pi_losses))
+        pi_grad_norm = sum(pi_grad_norms) / float(len(pi_grad_norms))
+
+        v_grad_norms = []
+        v_losses = []
         for _ in range(self.train_v_iters):
-            self.ac.v.zero_grad()
-            v_loss = self.compute_loss_v(data)
+            # self.ac.v.zero_grad()
+            self.vf_optimizer.zero_grad()
+            v_loss = self.compute_loss_v(obs, ret)
+            v_losses.append(v_loss)
             v_loss.backward()
             for p in self.ac.v.parameters():
-                v_grad_norm += torch.norm(p.grad)
+                v_grad_norms.append(torch.norm(p.grad))
             self.vf_optimizer.step()
 
-        v_grad_norm /= float(self.train_v_iters)
+        v_loss_total = sum(v_losses) / float(len(v_losses))
+        v_grad_norm = sum(v_grad_norms) / float(len(v_grad_norms))
 
-        self.logger.store(LossPi=pi_loss, LossV=v_loss, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm)
+        self.logger.store(LossPi=pi_loss_total, LossV=v_loss_total, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm, StopIter=pi_stop_iter, AverageKL=akl)
 
 def ppo(
         env_fn,
@@ -234,7 +257,7 @@ def ppo(
             the current policy and value function.
 
     """
-
+    print("ac_kwargs", ac_kwargs)
     ac_kwargs = ac_kwargs or {}
     logger_kwargs = logger_kwargs or {}
 
