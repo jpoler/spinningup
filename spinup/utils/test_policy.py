@@ -1,12 +1,17 @@
+import base64
 import time
 import joblib
 import os
 import os.path as osp
+import pickle
+import zlib
+
 import tensorflow as tf
 import torch
 from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph
-
+import gym.wrappers
+import numpy as np
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
     """
@@ -57,8 +62,14 @@ def load_policy_and_env(fpath, itr='last', deterministic=False):
     # (sometimes this will fail because the environment could not be pickled)
     try:
         state = joblib.load(osp.join(fpath, 'vars'+itr+'.pkl'))
-        env = state['env']
-    except:
+        if 'env_fn' in state:
+            encoded_env_fn = state['env_fn']
+            env_fn = pickle.loads(zlib.decompress(base64.b64decode(encoded_env_fn)))
+            env = env_fn()
+        else:
+            env = state['env']
+    except e:
+        print(e)
         env = None
 
     return env, get_action
@@ -100,7 +111,7 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
     # make function for producing an action given a single state
     def get_action(x):
         with torch.no_grad():
-            x = torch.as_tensor(x, dtype=torch.float32)
+            x = torch.as_tensor(x[np.newaxis, :], dtype=torch.float32)
             action = model.act(x)
         return action
 
@@ -108,7 +119,6 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
 
 
 def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
-
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
@@ -122,7 +132,10 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
             time.sleep(1e-2)
 
         a = get_action(o)
-        o, r, d, _ = env.step(a)
+        print("action", a, type(a), a[0])
+        print("env.action_space", env.action_space)
+        # might need to squeeze in actor?
+        o, r, d, _ = env.step(a[0])
         ep_ret += r
         ep_len += 1
 
