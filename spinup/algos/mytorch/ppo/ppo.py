@@ -1,4 +1,5 @@
 from copy import deepcopy
+from functools import partial
 import time
 
 from torch.optim import Adam
@@ -10,9 +11,8 @@ from spinup.algos.mytorch.base.actor_critic import MLPActorCritic
 from spinup.algos.mytorch.base.algorithm import Algorithm
 from spinup.algos.mytorch.base.buffer import GAEBuffer
 from spinup.utils.logx import EpochLogger
-from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
+from spinup.algos.mytorch.base.atari import is_atari_env
 
 class PPOAlgorithm(Algorithm):
     def __init__(
@@ -30,15 +30,20 @@ class PPOAlgorithm(Algorithm):
             target_kl=0.01,
             **kwargs,
     ):
-        env = env_fn()
-        buf_size = int(kwargs["steps_per_epoch"] / num_procs())
-        buf = GAEBuffer(env.observation_space.shape, env.action_space.shape, buf_size, gamma=gamma, lam=lam)
-        self.ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
-        print("ac", self.ac)
-        super().__init__(env, buf, **kwargs)
+        buf_fn = partial(GAEBuffer, gamma=gamma, lam=lam)
+
+        super().__init__(env_fn, buf_fn, **kwargs)
+
+        self.gpu = torch.device("cuda:0")
+        self.cpu = torch.device("cpu")
+        conv = is_atari_env(self.env)
+        self.gpu_ac = actor_critic(self.env.observation_space, self.env.action_space, conv=conv, **ac_kwargs)
+        self.gpu_ac.to(self.gpu)
+        self.ac = deepcopy(self.gpu_ac)
+        self.ac.to(self.cpu)
         self.v_mse_loss = torch.nn.MSELoss()
-        self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
-        self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
+        self.pi_optimizer = Adam(self.gpu_ac.pi.parameters(), lr=pi_lr)
+        self.vf_optimizer = Adam(self.gpu_ac.v.parameters(), lr=vf_lr)
         self.gamma = gamma
         self.clip_ratio = clip_ratio
         self.pi_lr = pi_lr
@@ -67,7 +72,7 @@ class PPOAlgorithm(Algorithm):
         return kl.mean()
 
     def compute_loss_pi(self, obs, act, adv, logp_old):
-        pi_new, logp_new = self.ac.pi(obs, act)
+        pi_new, logp_new = self.gpu_ac.pi(obs, act)
         ratio = torch.exp(logp_new - logp_old)
         adv_clipped = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
         surrogate_objective_clipped = -(torch.min(ratio * adv, adv_clipped)).mean()
@@ -82,17 +87,19 @@ class PPOAlgorithm(Algorithm):
         return surrogate_objective_clipped
 
     def compute_loss_v(self, obs, ret):
-        v = self.ac.v(obs)
+        v = self.gpu_ac.v(obs)
         return self.v_mse_loss(v, ret)
 
-    def update(self, data):
+    def update(self):
+        data = self.buf.get(device=self.gpu)
+
         obs = data["obs"]
         act = data["act"]
         ret = data["ret"]
         adv = data["adv"]
         logp_old = data["logp"]
 
-        actor_old = deepcopy(self.ac.pi)
+        actor_old = deepcopy(self.gpu_ac.pi)
         with torch.no_grad():
             pi_old, _ = actor_old(obs)
 
@@ -104,13 +111,13 @@ class PPOAlgorithm(Algorithm):
             pi_losses.append(pi_loss)
 
             with torch.no_grad():
-                pi_new, _ = self.ac.pi(obs)
+                pi_new, _ = self.gpu_ac.pi(obs)
             akl = self.average_kl(pi_old, pi_new)
             if akl > 1.5*self.target_kl:
                 break
 
             pi_loss.backward()
-            for p in self.ac.pi.parameters():
+            for p in self.gpu_ac.pi.parameters():
                 pi_grad_norms.append(torch.norm(p.grad))
             self.pi_optimizer.step()
 
@@ -122,12 +129,11 @@ class PPOAlgorithm(Algorithm):
         v_grad_norms = []
         v_losses = []
         for _ in range(self.train_v_iters):
-            # self.ac.v.zero_grad()
             self.vf_optimizer.zero_grad()
             v_loss = self.compute_loss_v(obs, ret)
             v_losses.append(v_loss)
             v_loss.backward()
-            for p in self.ac.v.parameters():
+            for p in self.gpu_ac.v.parameters():
                 v_grad_norms.append(torch.norm(p.grad))
             self.vf_optimizer.step()
 
@@ -135,6 +141,9 @@ class PPOAlgorithm(Algorithm):
         v_grad_norm = sum(v_grad_norms) / float(len(v_grad_norms))
 
         self.logger.store(LossPi=pi_loss_total, LossV=v_loss_total, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm, StopIter=pi_stop_iter, AverageKL=akl)
+
+        self.ac = deepcopy(self.gpu_ac)
+        self.ac.to(self.cpu)
 
 def ppo(
         env_fn,
@@ -257,7 +266,6 @@ def ppo(
             the current policy and value function.
 
     """
-    print("ac_kwargs", ac_kwargs)
     ac_kwargs = ac_kwargs or {}
     logger_kwargs = logger_kwargs or {}
 

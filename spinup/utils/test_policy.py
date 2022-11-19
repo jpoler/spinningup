@@ -1,12 +1,17 @@
+import base64
 import time
 import joblib
 import os
 import os.path as osp
+import pickle
+import zlib
+
 import tensorflow as tf
 import torch
 from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph
-
+import gym.wrappers
+import numpy as np
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
     """
@@ -57,8 +62,14 @@ def load_policy_and_env(fpath, itr='last', deterministic=False):
     # (sometimes this will fail because the environment could not be pickled)
     try:
         state = joblib.load(osp.join(fpath, 'vars'+itr+'.pkl'))
-        env = state['env']
-    except:
+        if 'env_fn' in state:
+            encoded_env_fn = state['env_fn']
+            env_fn = pickle.loads(zlib.decompress(base64.b64decode(encoded_env_fn)))
+            env = env_fn()
+        else:
+            env = state['env']
+    except e:
+        print(e)
         env = None
 
     return env, get_action
@@ -88,6 +99,10 @@ def load_tf_policy(fpath, itr, deterministic=False):
 
     return get_action
 
+def _eval_lazyframe(obs):
+    if isinstance(obs, gym.wrappers.frame_stack.LazyFrames):
+        return obs.__array__()[np.newaxis, :]
+    return obs
 
 def load_pytorch_policy(fpath, itr, deterministic=False):
     """ Load a pytorch policy saved with Spinning Up Logger."""
@@ -108,14 +123,14 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
 
 
 def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
-
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
         "page on Experiment Outputs for how to handle this situation."
 
     logger = EpochLogger()
-    o, r, d, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
+    o = _eval_lazyframe(env.reset())
+    r, d, ep_ret, ep_len, n = 0, False, 0, 0, 0
     while n < num_episodes:
         if render:
             env.render()
@@ -123,13 +138,15 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
         a = get_action(o)
         o, r, d, _ = env.step(a)
+        o = _eval_lazyframe(o)
         ep_ret += r
         ep_len += 1
 
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
             print('Episode %d \t EpRet %.3f \t EpLen %d'%(n, ep_ret, ep_len))
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            o = _eval_lazyframe(env.reset())
+            r, d, ep_ret, ep_len = 0, False, 0, 0
             n += 1
 
     logger.log_tabular('EpRet', with_min_and_max=True)

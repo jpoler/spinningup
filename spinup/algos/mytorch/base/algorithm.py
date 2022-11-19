@@ -1,22 +1,20 @@
-
 from abc import ABC, abstractmethod
-from copy import deepcopy
+import base64
+import cloudpickle
+import time
+import zlib
+
+import gym
 import numpy as np
 import torch
-from torch.optim import Adam
-import gym
-import time
-import spinup.algos.mytorch.trpo.core as core
-from spinup.utils.logx import EpochLogger
-from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
+from spinup.utils.logx import EpochLogger
 
 class Algorithm(ABC):
     def __init__(
             self,
-            env,
-            buf,
+            env_fn,
+            buf_fn,
             seed=0,
             steps_per_epoch=4000,
             epochs=50,
@@ -30,18 +28,24 @@ class Algorithm(ABC):
         self._logger_kwargs = logger_kwargs or {}
         self.logger = EpochLogger(**logger_kwargs)
 
-        self.env = env
+        self.env = env_fn()
+        pickled_env_fn = cloudpickle.dumps(env_fn)
+        self.encoded_env_fn = base64.b64encode(zlib.compress(pickled_env_fn)).decode('utf-8')
 
-        self.buf = buf
 
-        self.seed = seed + 10000 * proc_id()
+        # TODO revert
+        # self.seed = seed + 10000 * proc_id()
+        self.seed = seed
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
 
         self.steps_per_epoch = steps_per_epoch
         self.epochs = epochs
         self.max_ep_len = max_ep_len
-        self.local_steps_per_epoch = int(steps_per_epoch / num_procs())
+        # self.local_steps_per_epoch = int(steps_per_epoch / num_procs())
+        self.local_steps_per_epoch = steps_per_epoch
+
+        self.buf = buf_fn(self.env.observation_space.shape, self.env.action_space.shape, self.local_steps_per_epoch)
 
         self.saved_config = saved_config
         self.save_freq = save_freq
@@ -73,6 +77,11 @@ class Algorithm(ABC):
         self.log_epoch()
         self.logger.dump_tabular()
 
+    def _eval_lazyframe(self, obs):
+        if isinstance(obs, gym.wrappers.frame_stack.LazyFrames):
+            return obs.__array__()[np.newaxis, :]
+        return obs
+
     def run(self):
         # torch.set_printoptions(profile="full")
         # Special function to avoid certain slowdowns from PyTorch + MPI combo.
@@ -90,7 +99,10 @@ class Algorithm(ABC):
 
         # Prepare for interaction with environment
         start_time = time.time()
-        obs, ep_ret, ep_len = self.env.reset(), 0, 0
+        obs = self._eval_lazyframe(self.env.reset())
+        ep_ret, ep_len = 0, 0
+
+
 
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(self.epochs):
@@ -107,7 +119,7 @@ class Algorithm(ABC):
                 ep_len += 1
                 self.buf.store(obs, act, rew, val, logp)
 
-                obs = next_obs
+                obs = self._eval_lazyframe(next_obs)
 
                 truncated = (ep_len >= self.max_ep_len) or (t == self.local_steps_per_epoch - 1)
                 finished = done or truncated
@@ -120,17 +132,15 @@ class Algorithm(ABC):
 
                 if finished:
                     self.logger.store(EpRet=ep_ret, EpLen=ep_len)
-                    obs = self.env.reset()
+                    obs = self._eval_lazyframe(self.env.reset())
                     ep_len = 0
                     ep_ret = 0
 
             # Save model
             if (epoch % self.save_freq == 0) or (epoch == self.epochs-1):
-                self.logger.save_state({'env': self.env}, None)
+                self.logger.save_state({'env_fn': self.encoded_env_fn}, None)
 
-            epoch_data = self.buf.get()
-
-            self.update(epoch_data)
+            self.update()
 
             self._log_epoch(epoch, start_time)
 

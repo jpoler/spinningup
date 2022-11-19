@@ -1,3 +1,4 @@
+from functools import partial
 import time
 
 from torch.optim import Adam
@@ -26,11 +27,9 @@ class VPGAlgorithm(Algorithm):
             lam=0.97,
             **kwargs,
     ):
-        env = env_fn()
-        buf_size = int(kwargs["steps_per_epoch"] / num_procs())
-        buf = GAEBuffer(env.observation_space.shape, env.action_space.shape, buf_size, gamma=gamma, lam=lam)
-        self.ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
-        super().__init__(env, buf, **kwargs)
+        buf_fn = partial(GAEBuffer, gamma=gamma, lam=lam)
+        super().__init__(env_fn, buf_fn, **kwargs)
+        self.ac = actor_critic(self.env.observation_space, self.env.action_space, **ac_kwargs)
         self.v_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
         self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
@@ -69,10 +68,12 @@ class VPGAlgorithm(Algorithm):
         obs = data["obs"]
         ret = data["ret"]
 
-        v = torch.squeeze(self.ac.v(obs))
+        v = self.ac.v(obs)
         return self.v_mse_loss(v, ret)
 
-    def update(self, data):
+    def update(self):
+        data = self.buf.get()
+
         self.ac.pi.zero_grad()
         pi_loss = self.compute_loss_pi(data)
         pi_loss.backward()

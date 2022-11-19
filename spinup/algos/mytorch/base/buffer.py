@@ -1,16 +1,6 @@
-from abc import ABC, abstractmethod
-from copy import deepcopy
-
 import numpy as np
 import scipy.signal
 import torch
-from torch.optim import Adam
-import gym
-import time
-
-from spinup.utils.logx import EpochLogger
-from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -93,7 +83,7 @@ class GAEBuffer:
 
         self.path_start_idx = self.ptr
 
-    def get(self):
+    def get(self, device=None):
         """
         Call this at the end of an epoch to get all of the data from
         the buffer, with advantages appropriately normalized (shifted to have
@@ -102,8 +92,9 @@ class GAEBuffer:
         assert self.ptr == self.max_size    # buffer has to be full before you can get
         self.ptr, self.path_start_idx = 0, 0
         # the next two lines implement the advantage normalization trick
-        adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
+        # adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
+        adv_mean, adv_std = np.mean(self.adv_buf), np.std(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
                     adv=self.adv_buf, logp=self.logp_buf)
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k,v in data.items()}

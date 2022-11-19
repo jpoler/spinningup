@@ -2,24 +2,31 @@ import numpy as np
 from gym.spaces import Box, Discrete
 
 import torch
-import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 
-def mlp(sizes, activation, output_activation=nn.Identity):
+def mlp(sizes, activation, output_activation=torch.nn.Identity, conv=False):
     layers = []
+    if conv:
+        activation = torch.nn.ReLU
+        layers += [torch.nn.Conv2d(4, 16, (8, 8), stride=4), activation()]
+        layers += [torch.nn.Conv2d(16, 32, (4, 4), stride=2), activation()]
+        layers += [torch.nn.Flatten()]
+        # TODO remove hard coding
+        sizes[0] = 9 * 9 * 32
+
     for i in range(len(sizes) - 1):
         act = output_activation if i == len(sizes) - 2 else activation
         print(sizes[i], sizes[i+1])
-        layers += [nn.Linear(sizes[i], sizes[i+1]), act()]
+        layers += [torch.nn.Linear(sizes[i], sizes[i+1]), act()]
     print(layers)
-    return nn.Sequential(*layers)
+    return torch.nn.Sequential(*layers)
 
 
 def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
 
-class Actor(nn.Module):
+class Actor(torch.nn.Module):
 
     def _distribution(self, obs):
         raise NotImplementedError
@@ -40,9 +47,9 @@ class Actor(nn.Module):
 
 class MLPCategoricalActor(Actor):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, conv=False):
         super().__init__()
-        self._mlp = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
+        self._mlp = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation, conv=conv)
 
     def _distribution(self, obs):
         logits = self._mlp(obs.float())
@@ -69,31 +76,31 @@ class MLPGaussianActor(Actor):
         return pi.log_prob(act).sum(axis=-1)
 
 
-class MLPCritic(nn.Module):
+class MLPCritic(torch.nn.Module):
 
-    def __init__(self, obs_dim, hidden_sizes, activation):
+    def __init__(self, obs_dim, hidden_sizes, activation, conv=False):
         super().__init__()
-        self._mlp = mlp([obs_dim] + list(hidden_sizes) + [1], activation)
+        self._mlp = mlp([obs_dim] + list(hidden_sizes) + [1], activation, conv=conv)
 
     def forward(self, obs):
         return torch.squeeze(self._mlp(obs.float()), -1)
 
-class MLPActorCritic(nn.Module):
+class MLPActorCritic(torch.nn.Module):
 
 
     def __init__(self, observation_space, action_space,
-                 hidden_sizes=(64,64), activation=nn.Tanh):
+                 hidden_sizes=(64,64), activation=torch.nn.Tanh, conv=False):
         super().__init__()
 
         self._obs_dim = observation_space.shape[0]
         if isinstance(action_space, Discrete):
             self._act_dim = action_space.n
-            self.pi = MLPCategoricalActor(self._obs_dim, self._act_dim, hidden_sizes, activation)
+            self.pi = MLPCategoricalActor(self._obs_dim, self._act_dim, hidden_sizes, activation, conv=conv)
         elif isinstance(action_space, Box):
             self._act_dim = action_space.shape
             self.pi = MLPGaussianActor(self._obs_dim, self._act_dim, hidden_sizes, activation)
 
-        self.v = MLPCritic(self._obs_dim, hidden_sizes, activation)
+        self.v = MLPCritic(self._obs_dim, hidden_sizes, activation, conv=conv)
 
     def step(self, obs):
         obs = torch.from_numpy(obs)
@@ -106,4 +113,5 @@ class MLPActorCritic(nn.Module):
 
     def act(self, obs):
         with torch.no_grad():
-            return self.pi._distribution(obs).sample().numpy()
+            act = self.pi._distribution(obs).sample()
+            return act.numpy()

@@ -1,5 +1,6 @@
 # Disable TF deprecation warnings.
 # Syntax from tf1 is not expected to be compatible with tf2.
+import torch
 import tensorflow as tf
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 

@@ -1,3 +1,4 @@
+from spinup.algos.mytorch.base.atari import is_atari_env
 from spinup.user_config import DEFAULT_DATA_DIR, FORCE_DATESTAMP, \
                                DEFAULT_SHORTHAND, WAIT_BEFORE_LAUNCH
 from spinup.utils.logx import colorize
@@ -152,7 +153,15 @@ def call_experiment(exp_name, thunk, seed=0, num_cpu=1, data_dir=None,
         if 'env_name' in kwargs:
             import gym
             env_name = kwargs['env_name']
-            kwargs['env_fn'] = lambda : gym.make(env_name)
+            env = gym.make(env_name)
+            atari_env = is_atari_env(env)
+            def env_fn():
+                env = gym.make(env_name)
+                if atari_env:
+                    env = gym.wrappers.AtariPreprocessing(env)
+                    env = gym.wrappers.FrameStack(env, 4)
+                return env
+            kwargs['env_fn'] = env_fn
             del kwargs['env_name']
 
         # Fork into multiple processes

@@ -1,4 +1,5 @@
 from copy import deepcopy
+from functools import partial
 import time
 
 from torch.optim import Adam
@@ -30,11 +31,9 @@ class TRPOAlgorithm(Algorithm):
             lam=0.97,
             **kwargs,
     ):
-        env = env_fn()
-        buf_size = int(kwargs["steps_per_epoch"] / num_procs())
-        buf = GAEBuffer(env.observation_space.shape, env.action_space.shape, buf_size, gamma=gamma, lam=lam)
-        self.ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
-        super().__init__(env, buf, **kwargs)
+        buf_fn = partial(GAEBuffer, gamma=gamma, lam=lam)
+        super().__init__(env_fn, buf_fn, **kwargs)
+        self.ac = actor_critic(self.env.observation_space, self.env.action_space, **ac_kwargs)
         self.v_mse_loss = torch.nn.MSELoss()
         self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
         self.gamma = gamma
@@ -65,7 +64,8 @@ class TRPOAlgorithm(Algorithm):
     def act(self, obs):
         return self.ac.step(obs)
 
-    def update(self, data):
+    def update(self):
+        data = self.buf.get()
         obs = data["obs"]
         act = data["act"]
         ret = data["ret"]
@@ -90,7 +90,7 @@ class TRPOAlgorithm(Algorithm):
         v_grad_norm = 0
         for _ in range(self.train_v_iters):
             self.ac.v.zero_grad()
-            v = torch.squeeze(self.ac.v(obs))
+            v = self.ac.v(obs)
             v_loss = self.v_mse_loss(v, ret)
             v_loss.backward()
             for p in self.ac.v.parameters():
