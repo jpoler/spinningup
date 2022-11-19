@@ -5,6 +5,7 @@ Some simple logging functionality, inspired by rllab's logging.
 Logs to a tab-separated-values file (path/to/output_directory/progress.txt)
 
 """
+from copy import deepcopy
 import json
 import joblib
 import shutil
@@ -269,7 +270,8 @@ class Logger:
                 # something different for your personal PyTorch project.
                 # We use a catch_warnings() context to avoid the warnings about
                 # not being able to save the source code.
-                torch.save(self.pytorch_saver_elements, fname)
+
+                torch.save(deepcopy(self.pytorch_saver_elements).cpu(), fname)
 
 
     def dump_tabular(self):

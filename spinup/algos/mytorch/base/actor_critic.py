@@ -102,14 +102,14 @@ class MLPActorCritic(torch.nn.Module):
 
         self.v = MLPCritic(self._obs_dim, hidden_sizes, activation, conv=conv)
 
-    def step(self, obs):
-        obs = torch.from_numpy(obs)
+    def step(self, obs, device=None):
+        obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
         with torch.no_grad():
             dist = self.pi._distribution(obs)
             act = dist.sample()
             logp = self.pi._log_prob_from_distribution(dist, act)
             val = self.v(obs)
-        return act.numpy(), val.numpy(), logp.numpy()
+        return act.cpu().numpy(), val.cpu().numpy(), logp.cpu().numpy()
 
     def act(self, obs):
         with torch.no_grad():
