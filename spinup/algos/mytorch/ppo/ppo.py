@@ -28,6 +28,7 @@ class PPOAlgorithm(Algorithm):
             train_v_iters=80,
             lam=0.97,
             target_kl=0.01,
+            entropy_bonus_coef=0.01,
             use_gpu=False,
             **kwargs,
     ):
@@ -51,6 +52,7 @@ class PPOAlgorithm(Algorithm):
         self.train_v_iters = train_v_iters
         self.lam = lam
         self.target_kl = target_kl
+        self.entropy_bonus_coef = entropy_bonus_coef
 
 
     def log_epoch(self):
@@ -61,6 +63,7 @@ class PPOAlgorithm(Algorithm):
         self.logger.log_tabular('Entropy', average_only=True)
         self.logger.log_tabular('StopIter', average_only=True)
         self.logger.log_tabular('KL', average_only=True)
+        self.logger.log_tabular('AverageKL', average_only=True)
         self.logger.log_tabular('ClipFrac', average_only=True)
 
     def act(self, obs):
@@ -83,7 +86,7 @@ class PPOAlgorithm(Algorithm):
         entropy = pi_new.entropy().mean().item()
         self.logger.store(KL=kl, Entropy=entropy, ClipFrac=clip_frac)
 
-        return surrogate_objective_clipped
+        return surrogate_objective_clipped + self.entropy_bonus_coef * entropy
 
     def compute_loss_v(self, obs, ret):
         v = self.ac.v(obs)
@@ -108,16 +111,24 @@ class PPOAlgorithm(Algorithm):
             pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
             pi_losses.append(pi_loss)
 
-            with torch.no_grad():
-                pi_new, _ = self.ac.pi(obs)
-            akl = self.average_kl(pi_old, pi_new)
-            if akl > 1.5*self.target_kl:
-                break
+            saved_params = [deepcopy(p) for p in self.ac.pi.parameters()]
+            state_dict = self.pi_optimizer.state_dict()
 
             pi_loss.backward()
             for p in self.ac.pi.parameters():
                 pi_grad_norms.append(torch.norm(p.grad))
             self.pi_optimizer.step()
+
+            with torch.no_grad():
+                pi_new, _ = self.ac.pi(obs)
+            akl = self.average_kl(pi_old, pi_new)
+
+            if akl > 1.5*self.target_kl:
+                self.logger.log(f"Average KL {akl} is larger than {1.5*self.target_kl}")
+                for p, saved_p in zip(self.ac.pi.parameters(), saved_params):
+                    p.data = saved_p.data
+                self.pi_optimizer.load_state_dict(state_dict)
+                break
 
         pi_stop_iter = i
 
@@ -156,6 +167,7 @@ def ppo(
         lam=0.97,
         max_ep_len=1000,
         target_kl=0.01,
+        entropy_bonus_coef=0.01,
         logger_kwargs=None,
         save_freq=10,
         use_gpu=False,
@@ -283,6 +295,7 @@ def ppo(
         lam=lam,
         max_ep_len=max_ep_len,
         target_kl=target_kl,
+        entropy_bonus_coef=entropy_bonus_coef,
         logger_kwargs=logger_kwargs,
         saved_config=saved_config,
         save_freq=save_freq,
