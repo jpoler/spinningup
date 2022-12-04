@@ -1,8 +1,8 @@
 from copy import deepcopy
 from functools import partial
 import time
-
 from torch.optim import Adam
+from torch.optim.lr_scheduler import LinearLR
 import numpy as np
 import torch
 import gym
@@ -19,13 +19,16 @@ class PPOAlgorithm(Algorithm):
             self,
             env_fn,
             actor_critic=MLPActorCritic,
+            epochs=50,
             ac_kwargs=None,
             gamma=0.99,
             clip_ratio=0.2,
             pi_lr=3e-4,
             vf_lr=1e-3,
-            train_pi_iters=80,
-            train_v_iters=80,
+            train_pi_iters=10,
+            train_pi_minibatches=4,
+            train_v_iters=10,
+            train_v_minibatches=4,
             lam=0.97,
             target_kl=0.01,
             entropy_bonus_coef=0.01,
@@ -34,7 +37,7 @@ class PPOAlgorithm(Algorithm):
     ):
         buf_fn = partial(GAEBuffer, gamma=gamma, lam=lam)
 
-        super().__init__(env_fn, buf_fn, **kwargs)
+        super().__init__(env_fn, buf_fn, epochs=epochs, **kwargs)
 
         self.use_gpu = use_gpu
         self.device = torch.device("cuda:0" if self.use_gpu else "cpu")
@@ -43,13 +46,17 @@ class PPOAlgorithm(Algorithm):
         self.ac.to(self.device)
         self.v_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
+        self.pi_lr_scheduler = LinearLR(self.pi_optimizer, start_factor=1., end_factor=0., total_iters=epochs)
         self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
+        self.vf_lr_scheduler = LinearLR(self.vf_optimizer, start_factor=1., end_factor=0., total_iters=epochs)
         self.gamma = gamma
         self.clip_ratio = clip_ratio
         self.pi_lr = pi_lr
         self.vf_lr = vf_lr
         self.train_pi_iters = train_pi_iters
+        self.train_pi_minibatches = train_pi_minibatches
         self.train_v_iters = train_v_iters
+        self.train_v_minibatches = train_v_minibatches
         self.lam = lam
         self.target_kl = target_kl
         self.entropy_bonus_coef = entropy_bonus_coef
@@ -77,7 +84,7 @@ class PPOAlgorithm(Algorithm):
         pi_new, logp_new = self.ac.pi(obs, act)
         ratio = torch.exp(logp_new - logp_old)
         adv_clipped = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
-        surrogate_objective_clipped = -(torch.min(ratio * adv, adv_clipped)).mean()
+        surrogate_objective_clipped = (torch.min(ratio * adv, adv_clipped)).mean()
 
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
         clip_frac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
@@ -86,7 +93,7 @@ class PPOAlgorithm(Algorithm):
         entropy = pi_new.entropy().mean().item()
         self.logger.store(KL=kl, Entropy=entropy, ClipFrac=clip_frac)
 
-        return surrogate_objective_clipped + self.entropy_bonus_coef * entropy
+        return -surrogate_objective_clipped - self.entropy_bonus_coef * entropy
 
     def compute_loss_v(self, obs, ret):
         v = self.ac.v(obs)
@@ -94,62 +101,83 @@ class PPOAlgorithm(Algorithm):
 
     def update(self):
         data = self.buf.get(device=self.device)
-        obs = data["obs"]
-        act = data["act"]
-        ret = data["ret"]
-        adv = data["adv"]
-        logp_old = data["logp"]
+        obs_all = data["obs"]
+        act_all = data["act"]
+        ret_all = data["ret"]
+        adv_all = data["adv"]
+        logp_old_all = data["logp"]
+
+        n_steps = len(obs_all)
+        pi_batch_size = n_steps // self.train_pi_minibatches
+        v_batch_size = n_steps // self.train_v_minibatches
+        assert n_steps % pi_batch_size == 0
+        assert n_steps % v_batch_size == 0
 
         actor_old = deepcopy(self.ac.pi)
-        with torch.no_grad():
-            pi_old, _ = actor_old(obs)
 
         pi_grad_norms = []
         pi_losses = []
+        v_grad_norms = []
+        v_losses = []
+
+
         for i in range(self.train_pi_iters):
-            self.pi_optimizer.zero_grad()
-            pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
-            pi_losses.append(pi_loss)
+            permutation = torch.randperm(n_steps)
+            for j in range(0, n_steps, pi_batch_size):
+                idx = permutation[j:j+pi_batch_size]
+                obs, act, ret, adv, logp_old = obs_all[idx], act_all[idx], ret_all[idx], adv_all[idx], logp_old_all[idx]
 
-            saved_params = [deepcopy(p) for p in self.ac.pi.parameters()]
-            state_dict = self.pi_optimizer.state_dict()
+                self.pi_optimizer.zero_grad()
+                self.vf_optimizer.zero_grad()
+                pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
+                pi_losses.append(pi_loss)
 
-            pi_loss.backward()
-            for p in self.ac.pi.parameters():
-                pi_grad_norms.append(torch.norm(p.grad))
-            self.pi_optimizer.step()
+                saved_params = [deepcopy(p) for p in self.ac.pi.parameters()]
+                state_dict = self.pi_optimizer.state_dict()
 
-            with torch.no_grad():
-                pi_new, _ = self.ac.pi(obs)
-            akl = self.average_kl(pi_old, pi_new)
+                pi_loss.backward()
+                for p in self.ac.pi.parameters():
+                    pi_grad_norms.append(torch.norm(p.grad))
+                self.pi_optimizer.step()
 
-            if akl > 1.5*self.target_kl:
-                self.logger.log(f"Average KL {akl} is larger than {1.5*self.target_kl}")
-                for p, saved_p in zip(self.ac.pi.parameters(), saved_params):
-                    p.data = saved_p.data
-                self.pi_optimizer.load_state_dict(state_dict)
-                break
+                with torch.no_grad():
+                    pi_old, _ = actor_old(obs)
+                    pi_new, _ = self.ac.pi(obs)
+                akl = self.average_kl(pi_old, pi_new)
+
+                if akl > 1.5*self.target_kl:
+                    self.logger.log(f"Average KL {akl} is larger than {1.5*self.target_kl}")
+                    for p, saved_p in zip(self.ac.pi.parameters(), saved_params):
+                        p.data = saved_p.data
+                    self.pi_optimizer.load_state_dict(state_dict)
+                    break
+
+                v_loss = self.compute_loss_v(obs, ret)
+                v_losses.append(v_loss)
+                v_loss.backward()
+                for p in self.ac.v.parameters():
+                    v_grad_norms.append(torch.norm(p.grad))
+                self.vf_optimizer.step()
+            else:
+                continue
+
+            break
+
+        pi_lr = self.pi_lr_scheduler.get_last_lr()
+        vf_lr = self.vf_lr_scheduler.get_last_lr()
+        self.pi_lr_scheduler.step()
+        self.vf_lr_scheduler.step()
+
 
         pi_stop_iter = i
 
         pi_loss_total = sum(pi_losses) / float(len(pi_losses))
         pi_grad_norm = sum(pi_grad_norms) / float(len(pi_grad_norms))
 
-        v_grad_norms = []
-        v_losses = []
-        for _ in range(self.train_v_iters):
-            self.vf_optimizer.zero_grad()
-            v_loss = self.compute_loss_v(obs, ret)
-            v_losses.append(v_loss)
-            v_loss.backward()
-            for p in self.ac.v.parameters():
-                v_grad_norms.append(torch.norm(p.grad))
-            self.vf_optimizer.step()
-
         v_loss_total = sum(v_losses) / float(len(v_losses))
         v_grad_norm = sum(v_grad_norms) / float(len(v_grad_norms))
 
-        self.logger.store(LossPi=pi_loss_total, LossV=v_loss_total, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm, StopIter=pi_stop_iter, AverageKL=akl)
+        self.logger.store(LossPi=pi_loss_total, LossV=v_loss_total, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm, StopIter=pi_stop_iter, AverageKL=akl, PiLR=pi_lr, VFLR=vf_lr)
 
 def ppo(
         env_fn,
@@ -162,8 +190,10 @@ def ppo(
         clip_ratio=0.2,
         pi_lr=3e-4,
         vf_lr=1e-3,
-        train_pi_iters=80,
-        train_v_iters=80,
+        train_pi_iters=10,
+        train_pi_minibatches=4,
+        train_v_iters=10,
+        train_v_minibatches=4,
         lam=0.97,
         max_ep_len=1000,
         target_kl=0.01,
@@ -291,7 +321,9 @@ def ppo(
         pi_lr=pi_lr,
         vf_lr=vf_lr,
         train_pi_iters=train_pi_iters,
+        train_pi_minibatches=train_pi_minibatches,
         train_v_iters=train_v_iters,
+        train_v_minibatches=train_v_minibatches,
         lam=lam,
         max_ep_len=max_ep_len,
         target_kl=target_kl,

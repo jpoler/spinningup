@@ -122,15 +122,12 @@ class Algorithm(ABC):
                 obs = self._eval_lazyframe(next_obs)
 
                 truncated = (ep_len >= self.max_ep_len) or (t == self.local_steps_per_epoch - 1)
-                finished = done or truncated
 
                 if truncated:
                     _, val, _ = self.act(obs)
                     self.buf.finish_path(last_val=val)
                 elif done:
                     self.buf.finish_path()
-
-                if finished:
                     self.logger.store(EpRet=ep_ret, EpLen=ep_len)
                     obs = self._eval_lazyframe(self.env.reset())
                     ep_len = 0
