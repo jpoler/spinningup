@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from gym.spaces import Box, Discrete
 
@@ -20,7 +22,18 @@ def mlp(sizes, activation, output_activation=torch.nn.Identity, conv=False):
         print(sizes[i], sizes[i+1])
         layers += [torch.nn.Linear(sizes[i], sizes[i+1]), act()]
     print(layers)
-    return torch.nn.Sequential(*layers)
+    seq = torch.nn.Sequential(*layers)
+    params = list(seq.parameters())
+    grouped_params = [params[i:i+2] for i in range(0, len(params), 2)]
+    for i, (w, b) in enumerate(grouped_params):
+        gain = math.sqrt(2.)
+        if i == len(grouped_params) - 1 and sizes[i + 1] == 1:
+            gain = 1.
+        elif i == len(grouped_params) - 1:
+            gain = 0.01
+        torch.nn.init.orthogonal_(w.data, gain=gain)
+        b.data.zero_()
+    return seq
 
 
 def count_vars(module):
