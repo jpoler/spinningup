@@ -8,11 +8,11 @@ import gym
 
 from spinup.algos.mytorch.base.actor_critic import MLPActorCritic
 from spinup.algos.mytorch.base.algorithm import Algorithm
+from spinup.algos.mytorch.base.atari import is_atari_env
 from spinup.algos.mytorch.base.buffer import GAEBuffer
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-
 
 class VPGAlgorithm(Algorithm):
     def __init__(
@@ -34,7 +34,8 @@ class VPGAlgorithm(Algorithm):
 
         self.use_gpu = use_gpu
         self.device = torch.device("cuda:0" if self.use_gpu else "cpu")
-        self.ac = actor_critic(self.env.observation_space, self.env.action_space, **ac_kwargs)
+        conv = is_atari_env(self.env)
+        self.ac = actor_critic(self.env.observation_space, self.env.action_space, conv=conv, **ac_kwargs)
         self.ac.to(self.device)
         self.v_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
