@@ -158,7 +158,7 @@ def call_experiment(exp_name, thunk, seed=0, num_cpu=1, data_dir=None,
             def env_fn():
                 env = gym.make(env_name)
                 if atari_env:
-                    env = gym.wrappers.AtariPreprocessing(env)
+                    env = gym.wrappers.AtariPreprocessing(env, scale_obs=True)
                     env = gym.wrappers.FrameStack(env, 4)
                 return env
             kwargs['env_fn'] = env_fn
