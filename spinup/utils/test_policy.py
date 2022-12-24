@@ -6,14 +6,14 @@ import os.path as osp
 import pickle
 import zlib
 
-import tensorflow as tf
 import torch
+import tensorflow as tf
 from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph
 import gym.wrappers
 import numpy as np
 
-def load_policy_and_env(fpath, itr='last', deterministic=False):
+def load_policy_and_env(fpath, itr='last', deterministic=False, use_gpu=False):
     """
     Load a policy from save, whether it's TF or PyTorch, along with RL env.
 
@@ -56,7 +56,7 @@ def load_policy_and_env(fpath, itr='last', deterministic=False):
     if backend == 'tf1':
         get_action = load_tf_policy(fpath, itr, deterministic)
     else:
-        get_action = load_pytorch_policy(fpath, itr, deterministic)
+        get_action = load_pytorch_policy(fpath, itr, deterministic, use_gpu)
 
     # try to load environment from save
     # (sometimes this will fail because the environment could not be pickled)
@@ -104,18 +104,21 @@ def _eval_lazyframe(obs):
         return obs.__array__()[np.newaxis, :]
     return obs
 
-def load_pytorch_policy(fpath, itr, deterministic=False):
+def load_pytorch_policy(fpath, itr, deterministic=False, use_gpu=False):
     """ Load a pytorch policy saved with Spinning Up Logger."""
     
+    device = torch.device("cuda:0" if use_gpu else "cpu")
     fname = osp.join(fpath, 'pyt_save', 'model'+itr+'.pt')
     print('\n\nLoading from %s.\n\n'%fname)
 
     model = torch.load(fname)
+    model.to(device)
+    print("device", next(model.parameters()).device)
 
     # make function for producing an action given a single state
     def get_action(x):
         with torch.no_grad():
-            x = torch.as_tensor(x, dtype=torch.float32)
+            x = torch.as_tensor(x, dtype=torch.float32, device=device)
             action = model.act(x)
         return action
 
@@ -163,8 +166,10 @@ if __name__ == '__main__':
     parser.add_argument('--norender', '-nr', action='store_true')
     parser.add_argument('--itr', '-i', type=int, default=-1)
     parser.add_argument('--deterministic', '-d', action='store_true')
+    parser.add_argument('--use_gpu', '-g', action='store_true')
     args = parser.parse_args()
     env, get_action = load_policy_and_env(args.fpath, 
                                           args.itr if args.itr >=0 else 'last',
-                                          args.deterministic)
+                                          args.deterministic,
+                                          use_gpu=args.use_gpu)
     run_policy(env, get_action, args.len, args.episodes, not(args.norender))
