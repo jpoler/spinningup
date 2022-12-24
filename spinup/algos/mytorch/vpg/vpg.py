@@ -25,11 +25,17 @@ class VPGAlgorithm(Algorithm):
             vf_lr=1e-3,
             train_v_iters=80,
             lam=0.97,
+            use_gpu=False,
             **kwargs,
     ):
         buf_fn = partial(GAEBuffer, gamma=gamma, lam=lam)
+
         super().__init__(env_fn, buf_fn, **kwargs)
+
+        self.use_gpu = use_gpu
+        self.device = torch.device("cuda:0" if self.use_gpu else "cpu")
         self.ac = actor_critic(self.env.observation_space, self.env.action_space, **ac_kwargs)
+        self.ac.to(self.device)
         self.v_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
         self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
@@ -48,7 +54,7 @@ class VPGAlgorithm(Algorithm):
         self.logger.log_tabular('Entropy', average_only=True)
 
     def act(self, obs):
-        return self.ac.step(obs)
+        return self.ac.step(obs, device=self.device)
 
     def compute_loss_pi(self, data):
         obs = data["obs"]
@@ -72,7 +78,7 @@ class VPGAlgorithm(Algorithm):
         return self.v_mse_loss(v, ret)
 
     def update(self):
-        data = self.buf.get()
+        data = self.buf.get(device=self.device)
 
         self.ac.pi.zero_grad()
         pi_loss = self.compute_loss_pi(data)
@@ -111,6 +117,7 @@ def vpg(
         max_ep_len=1000,
         logger_kwargs=None,
         save_freq=10,
+        use_gpu=True,
 ):
     """
     Vanilla Policy Gradient
@@ -197,6 +204,8 @@ def vpg(
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
 
+        use_gpu (bool): Which device to use for both acting and updating.
+
     """
     ac_kwargs = ac_kwargs or {}
     logger_kwargs = logger_kwargs or {}
@@ -219,6 +228,7 @@ def vpg(
         logger_kwargs=logger_kwargs,
         saved_config=saved_config,
         save_freq=save_freq,
+        use_gpu=use_gpu,
     )
 
     algo.run()
