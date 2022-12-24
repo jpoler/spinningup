@@ -127,4 +127,4 @@ class MLPActorCritic(torch.nn.Module):
     def act(self, obs):
         with torch.no_grad():
             act = self.pi._distribution(obs).sample()
-            return act.numpy()
+            return act.cpu().numpy()
