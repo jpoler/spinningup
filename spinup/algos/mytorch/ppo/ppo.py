@@ -9,10 +9,9 @@ import gym
 
 from spinup.algos.mytorch.base.actor_critic import MLPActorCritic
 from spinup.algos.mytorch.base.algorithm import Algorithm
+from spinup.algos.mytorch.base.atari import is_atari_env
 from spinup.algos.mytorch.base.buffer import GAEBuffer
 from spinup.utils.logx import EpochLogger
-
-from spinup.algos.mytorch.base.atari import is_atari_env
 
 class PPOAlgorithm(Algorithm):
     def __init__(
