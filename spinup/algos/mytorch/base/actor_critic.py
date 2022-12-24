@@ -27,7 +27,7 @@ def mlp(sizes, activation, output_activation=torch.nn.Identity, conv=False):
     grouped_params = [params[i:i+2] for i in range(0, len(params), 2)]
     for i, (w, b) in enumerate(grouped_params):
         gain = math.sqrt(2.)
-        if i == len(grouped_params) - 1 and sizes[i + 1] == 1:
+        if i == len(grouped_params) - 1 and sizes[-1] == 1:
             gain = 1.
         elif i == len(grouped_params) - 1:
             gain = 0.01
