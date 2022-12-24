@@ -69,7 +69,7 @@ class Algorithm(ABC):
         # Log info about epoch
         self.logger.log_tabular('Epoch', epoch)
         self.logger.log_tabular('EpRet', with_min_and_max=True)
-        self.logger.log_tabular('EpLen', average_only=True)
+        self.logger.log_tabular('EpLen', with_min_and_max=True)
         self.logger.log_tabular('TotalEnvInteracts', (epoch+1)*self.steps_per_epoch)
         self.logger.log_tabular('Vals', with_min_and_max=True)
         self.logger.log_tabular('Time', time.time()-start_time)
@@ -107,6 +107,7 @@ class Algorithm(ABC):
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(self.epochs):
             self.logger.store(Epoch=epoch)
+            nlogs = 0
             for t in range(self.local_steps_per_epoch):
                 if t % self.status_freq == 0:
                     print(f"\repoch: ({epoch + 1}/{self.epochs}) steps: ({t}/{self.local_steps_per_epoch})", end="")
@@ -121,17 +122,25 @@ class Algorithm(ABC):
 
                 obs = self._eval_lazyframe(next_obs)
 
-                truncated = (ep_len >= self.max_ep_len) or (t == self.local_steps_per_epoch - 1)
+                epoch_complete = (t == self.local_steps_per_epoch - 1)
+                truncated = (ep_len >= self.max_ep_len)
 
-                if truncated:
+                val = 0
+                if truncated or epoch_complete:
                     _, val, _ = self.act(obs)
+                if truncated or epoch_complete or done:
                     self.buf.finish_path(last_val=val)
-                elif done:
-                    self.buf.finish_path()
+                if truncated or done:
                     self.logger.store(EpRet=ep_ret, EpLen=ep_len)
+                    nlogs += 1
                     obs = self._eval_lazyframe(self.env.reset())
                     ep_len = 0
                     ep_ret = 0
+
+            # avoid logger exceptions in the event that an epoch was entirely
+            # one not-yet-complete episode
+            if nlogs == 0:
+                self.logger.store(EpRet=0, EpLen=0)
 
             # Save model
             if (epoch % self.save_freq == 0) or (epoch == self.epochs-1):
