@@ -25,10 +25,8 @@ class PPOAlgorithm(Algorithm):
             clip_ratio=0.2,
             pi_lr=3e-4,
             vf_lr=1e-3,
-            train_pi_iters=10,
-            train_pi_minibatches=4,
-            train_v_iters=10,
-            train_v_minibatches=4,
+            train_iters=10,
+            train_minibatches=4,
             lam=0.97,
             target_kl=0.01,
             entropy_bonus_coef=0.01,
@@ -53,10 +51,8 @@ class PPOAlgorithm(Algorithm):
         self.clip_ratio = clip_ratio
         self.pi_lr = pi_lr
         self.vf_lr = vf_lr
-        self.train_pi_iters = train_pi_iters
-        self.train_pi_minibatches = train_pi_minibatches
-        self.train_v_iters = train_v_iters
-        self.train_v_minibatches = train_v_minibatches
+        self.train_iters = train_iters
+        self.train_minibatches = train_minibatches
         self.lam = lam
         self.target_kl = target_kl
         self.entropy_bonus_coef = entropy_bonus_coef
@@ -108,10 +104,8 @@ class PPOAlgorithm(Algorithm):
         logp_old_all = data["logp"]
 
         n_steps = len(obs_all)
-        pi_batch_size = n_steps // self.train_pi_minibatches
-        v_batch_size = n_steps // self.train_v_minibatches
-        assert n_steps % pi_batch_size == 0
-        assert n_steps % v_batch_size == 0
+        batch_size = n_steps // self.train_minibatches
+        assert n_steps % batch_size == 0
 
         actor_old = deepcopy(self.ac.pi)
 
@@ -121,16 +115,15 @@ class PPOAlgorithm(Algorithm):
         v_losses = []
 
 
-        for i in range(self.train_pi_iters):
+        for i in range(self.train_iters):
             permutation = torch.randperm(n_steps)
-            for j in range(0, n_steps, pi_batch_size):
-                idx = permutation[j:j+pi_batch_size]
+            for j in range(0, n_steps, batch_size):
+                idx = permutation[j:j+batch_size]
                 obs, act, ret, adv, logp_old = obs_all[idx], act_all[idx], ret_all[idx], adv_all[idx], logp_old_all[idx]
 
                 self.pi_optimizer.zero_grad()
                 self.vf_optimizer.zero_grad()
                 pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
-                pi_losses.append(pi_loss)
 
                 saved_params = [deepcopy(p) for p in self.ac.pi.parameters()]
                 state_dict = self.pi_optimizer.state_dict()
@@ -153,11 +146,13 @@ class PPOAlgorithm(Algorithm):
                     break
 
                 v_loss = self.compute_loss_v(obs, ret)
-                v_losses.append(v_loss)
                 v_loss.backward()
                 for p in self.ac.v.parameters():
                     v_grad_norms.append(torch.norm(p.grad))
                 self.vf_optimizer.step()
+
+                pi_losses.append(pi_loss)
+                v_losses.append(v_loss)
             else:
                 continue
 
@@ -169,15 +164,20 @@ class PPOAlgorithm(Algorithm):
         self.vf_lr_scheduler.step()
 
 
-        pi_stop_iter = i
+        stop_iter = i
 
-        pi_loss_total = sum(pi_losses) / float(len(pi_losses))
-        pi_grad_norm = sum(pi_grad_norms) / float(len(pi_grad_norms))
+        if len(pi_losses) > 0:
+            pi_loss_total = sum(pi_losses) / float(len(pi_losses))
+            pi_grad_norm = sum(pi_grad_norms) / float(len(pi_grad_norms))
+            v_loss_total = sum(v_losses) / float(len(v_losses))
+            v_grad_norm = sum(v_grad_norms) / float(len(v_grad_norms))
+        else:
+            pi_loss_total = 0
+            pi_grad_norm = 0
+            v_loss_total = 0
+            v_grad_norm = 0
 
-        v_loss_total = sum(v_losses) / float(len(v_losses))
-        v_grad_norm = sum(v_grad_norms) / float(len(v_grad_norms))
-
-        self.logger.store(LossPi=pi_loss_total, LossV=v_loss_total, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm, StopIter=pi_stop_iter, AverageKL=akl, PiLR=pi_lr, VFLR=vf_lr)
+        self.logger.store(LossPi=pi_loss_total, LossV=v_loss_total, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm, StopIter=stop_iter, AverageKL=akl, PiLR=pi_lr, VFLR=vf_lr)
 
 def ppo(
         env_fn,
@@ -190,10 +190,8 @@ def ppo(
         clip_ratio=0.2,
         pi_lr=3e-4,
         vf_lr=1e-3,
-        train_pi_iters=10,
-        train_pi_minibatches=4,
-        train_v_iters=10,
-        train_v_minibatches=4,
+        train_iters=10,
+        train_minibatches=4,
         lam=0.97,
         max_ep_len=1000,
         target_kl=0.01,
@@ -282,12 +280,11 @@ def ppo(
 
         vf_lr (float): Learning rate for value function optimizer.
 
-        train_pi_iters (int): Maximum number of gradient descent steps to take
+        train_iters (int): Maximum number of gradient descent steps to take
             on policy loss per epoch. (Early stopping may cause optimizer
             to take fewer than this.)
 
-        train_v_iters (int): Number of gradient descent steps to take on
-            value function per epoch.
+        train_minibatches (int): Number of minibatches during training.
 
         lam (float): Lambda for GAE-Lambda. (Always between 0 and 1,
             close to 1.)
@@ -302,6 +299,8 @@ def ppo(
 
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
+
+        use_gpu (bool): Which device to use for both acting and updating.
 
     """
     ac_kwargs = ac_kwargs or {}
@@ -320,10 +319,8 @@ def ppo(
         clip_ratio=clip_ratio,
         pi_lr=pi_lr,
         vf_lr=vf_lr,
-        train_pi_iters=train_pi_iters,
-        train_pi_minibatches=train_pi_minibatches,
-        train_v_iters=train_v_iters,
-        train_v_minibatches=train_v_minibatches,
+        train_iters=train_iters,
+        train_minibatches=train_minibatches,
         lam=lam,
         max_ep_len=max_ep_len,
         target_kl=target_kl,
