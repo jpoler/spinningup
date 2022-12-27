@@ -23,7 +23,8 @@ class VPGAlgorithm(Algorithm):
             gamma=0.99,
             pi_lr=3e-4,
             vf_lr=1e-3,
-            train_v_iters=80,
+            train_iters=10,
+            train_minibatches=4,
             lam=0.97,
             use_gpu=False,
             **kwargs,
@@ -43,7 +44,8 @@ class VPGAlgorithm(Algorithm):
         self.gamma = gamma
         self.pi_lr = pi_lr
         self.vf_lr = vf_lr
-        self.train_v_iters = train_v_iters
+        self.train_iters = train_iters
+        self.train_minibatches = train_minibatches
         self.lam = lam
 
 
@@ -57,12 +59,7 @@ class VPGAlgorithm(Algorithm):
     def act(self, obs):
         return self.ac.step(obs, device=self.device)
 
-    def compute_loss_pi(self, data):
-        obs = data["obs"]
-        act = data["act"]
-        adv = data["adv"]
-        logp_old = data["logp"]
-
+    def compute_loss_pi(self, obs, act, adv, logp_old):
         dist, logp = self.ac.pi(obs, act)
 
         kl = (logp_old - logp).mean().item()
@@ -71,36 +68,63 @@ class VPGAlgorithm(Algorithm):
         self.logger.store(KL=kl, Entropy=entropy)
         return -(logp * adv).mean()
 
-    def compute_loss_v(self, data):
-        obs = data["obs"]
-        ret = data["ret"]
-
+    def compute_loss_v(self, obs, ret):
         v = self.ac.v(obs)
         return self.v_mse_loss(v, ret)
 
     def update(self):
         data = self.buf.get(device=self.device)
+        obs_all = data["obs"]
+        act_all = data["act"]
+        ret_all = data["ret"]
+        adv_all = data["adv"]
+        logp_old_all = data["logp"]
 
-        self.ac.pi.zero_grad()
-        pi_loss = self.compute_loss_pi(data)
-        pi_loss.backward()
-        pi_grad_norm = 0
-        for p in self.ac.pi.parameters():
-            pi_grad_norm += torch.norm(p.grad)
-        self.pi_optimizer.step()
+        n_steps = len(obs_all)
+        batch_size = n_steps // self.train_minibatches
+        assert n_steps % batch_size == 0
 
-        v_grad_norm = 0
-        for _ in range(self.train_v_iters):
-            self.ac.v.zero_grad()
-            v_loss = self.compute_loss_v(data)
-            v_loss.backward()
-            for p in self.ac.v.parameters():
-                v_grad_norm += torch.norm(p.grad)
-            self.vf_optimizer.step()
+        pi_grad_norms = []
+        pi_losses = []
+        v_grad_norms = []
+        v_losses = []
 
-        v_grad_norm /= float(self.train_v_iters)
+        for _ in range(self.train_iters):
+            permutation = torch.randperm(n_steps)
+            for j in range(0, n_steps, batch_size):
+                idx = permutation[j:j+batch_size]
+                obs, act, ret, adv, logp_old = obs_all[idx], act_all[idx], ret_all[idx], adv_all[idx], logp_old_all[idx]
 
-        self.logger.store(LossPi=pi_loss, LossV=v_loss, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm)
+                self.ac.pi.zero_grad()
+                self.ac.v.zero_grad()
+                pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
+                pi_loss.backward()
+                pi_grad_norm = 0
+                for p in self.ac.pi.parameters():
+                    pi_grad_norms.append(torch.norm(p.grad))
+                self.pi_optimizer.step()
+
+                v_loss = self.compute_loss_v(obs, ret)
+                v_loss.backward()
+                for p in self.ac.v.parameters():
+                    v_grad_norms.append(torch.norm(p.grad))
+                self.vf_optimizer.step()
+
+                pi_losses.append(pi_loss)
+                v_losses.append(v_loss)
+
+        if len(pi_losses) > 0:
+            pi_loss_total = sum(pi_losses) / float(len(pi_losses))
+            pi_grad_norm = sum(pi_grad_norms) / float(len(pi_grad_norms))
+            v_loss_total = sum(v_losses) / float(len(v_losses))
+            v_grad_norm = sum(v_grad_norms) / float(len(v_grad_norms))
+        else:
+            pi_loss_total = 0
+            pi_grad_norm = 0
+            v_loss_total = 0
+            v_grad_norm = 0
+
+        self.logger.store(LossPi=pi_loss_total, LossV=v_loss_total, GradNormPi=pi_grad_norm, GradNormV=v_grad_norm)
 
 
 def vpg(
@@ -113,7 +137,8 @@ def vpg(
         gamma=0.99,
         pi_lr=3e-4,
         vf_lr=1e-3,
-        train_v_iters=80,
+        train_iters=10,
+        train_minibatches=4,
         lam=0.97,
         max_ep_len=1000,
         logger_kwargs=None,
@@ -192,8 +217,10 @@ def vpg(
 
         vf_lr (float): Learning rate for value function optimizer.
 
-        train_v_iters (int): Number of gradient descent steps to take on
-            value function per epoch.
+        train_iters (int): Number of gradient descent steps to take
+            per epoch.
+
+        train_minibatches (int): Number of minibatches during training.
 
         lam (float): Lambda for GAE-Lambda. (Always between 0 and 1,
             close to 1.)
@@ -223,7 +250,8 @@ def vpg(
         gamma=gamma,
         pi_lr=pi_lr,
         vf_lr=vf_lr,
-        train_v_iters=train_v_iters,
+        train_iters=train_iters,
+        train_minibatches=train_minibatches,
         lam=lam,
         max_ep_len=max_ep_len,
         logger_kwargs=logger_kwargs,
