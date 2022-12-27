@@ -29,11 +29,17 @@ class TRPOAlgorithm(Algorithm):
             backtrack_iters=10,
             backtrack_coeff=0.8,
             lam=0.97,
+            use_gpu=False,
             **kwargs,
     ):
         buf_fn = partial(GAEBuffer, gamma=gamma, lam=lam)
+
         super().__init__(env_fn, buf_fn, **kwargs)
+
+        self.use_gpu = use_gpu
+        self.device = torch.device("cuda:0" if self.use_gpu else "cpu")
         self.ac = actor_critic(self.env.observation_space, self.env.action_space, **ac_kwargs)
+        self.ac.to(self.device)
         self.v_mse_loss = torch.nn.MSELoss()
         self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
         self.gamma = gamma
@@ -62,10 +68,10 @@ class TRPOAlgorithm(Algorithm):
         # logger.log_tabular('DeltaLossV', average_only=True)
 
     def act(self, obs):
-        return self.ac.step(obs)
+        return self.ac.step(obs, device=self.device)
 
     def update(self):
-        data = self.buf.get()
+        data = self.buf.get(device=self.device)
         obs = data["obs"]
         act = data["act"]
         ret = data["ret"]
@@ -122,6 +128,7 @@ def trpo(
         max_ep_len=1000,
         logger_kwargs=None,
         save_freq=10,
+        use_gpu=False,
 ):
     """
     Trust Region Policy Optimization
@@ -231,6 +238,9 @@ def trpo(
 
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
+
+        use_gpu (bool): Which device to use for both acting and updating.
+
     """
     ac_kwargs = ac_kwargs or {}
     logger_kwargs = logger_kwargs or {}
@@ -257,6 +267,7 @@ def trpo(
         logger_kwargs=logger_kwargs,
         saved_config=saved_config,
         save_freq=save_freq,
+        use_gpu=use_gpu,
     )
 
     algo.run()
