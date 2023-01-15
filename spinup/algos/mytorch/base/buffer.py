@@ -98,3 +98,46 @@ class GAEBuffer:
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k,v in data.items()}
+
+class ReplayBuffer:
+    """
+    ReplayBuffer is a replay buffer that stores one transition at a time.
+    """
+    def __init__(self, obs_dim, act_dim, size):
+        self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
+        self.act_buf = np.zeros(combined_shape(size, act_dim), dtype=np.float32)
+        self.rew_buf = np.zeros(size, dtype=np.float32)
+        self.next_obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
+        self.done_buf = np.zeros(size, dtype=np.float32)
+        self.ptr = 0
+        self.size = size
+
+    def store(self, obs, act, rew, next_obs, done):
+        """
+        Store a transition.
+
+        If buffer is already full, store overwrites the oldest transition.
+        """
+        idx = self.ptr % self.size
+        self.obs_buf[idx] = obs
+        self.act_buf[idx] = act
+        self.rew_buf[idx] = rew
+        self.next_obs_buf[idx] = next_obs
+        self.done_buf[idx] = done
+        self.ptr = self.ptr + 1
+
+    def get(self, batch_size=100, device=None):
+        """
+        Returns a uniform sample of transitions.
+        """
+        offset = min(self.ptr, self.size)
+        assert offset > batch_size
+        idx = np.random.choice(offset, batch_size, replace=False)
+        data = dict(
+            obs=self.obs_buf[idx],
+            act=self.act_buf[idx],
+            rew=self.rew_buf[idx],
+            next_obs=self.next_obs_buf[idx],
+            done=self.done_buf[idx],
+        )
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k,v in data.items()}
