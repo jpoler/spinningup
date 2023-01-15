@@ -42,7 +42,7 @@ class GAEBuffer:
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
-    def store(self, obs, act, rew, val, logp):
+    def store(self, obs, act, rew, val, logp, **kwargs):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
@@ -112,7 +112,7 @@ class ReplayBuffer:
         self.ptr = 0
         self.size = size
 
-    def store(self, obs, act, rew, next_obs, done):
+    def store(self, obs, act, rew, next_obs, done, **kwargs):
         """
         Store a transition.
 

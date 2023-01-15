@@ -118,7 +118,20 @@ class Algorithm(ABC):
                 next_obs, rew, done, _ = self.env.step(act)
                 ep_ret += rew
                 ep_len += 1
-                self.buf.store(obs, act, rew, val, logp)
+                # Note that the buffer could be a GAE buffer or a replay
+                # buffer. Each buffer has a different function signature, but
+                # also captures **kwargs so that we can dump all of the
+                # information into the function call and let the receiver
+                # select the arguments it requires.
+                self.buf.store(
+                    obs=obs,
+                    act=act,
+                    rew=rew,
+                    val=val,
+                    logp=logp,
+                    next_obs=next_obs,
+                    done=done,
+                )
 
                 obs = self._eval_lazyframe(next_obs)
 
