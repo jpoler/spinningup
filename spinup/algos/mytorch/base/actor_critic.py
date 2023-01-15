@@ -7,6 +7,7 @@ import torch
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 
+# TODO break conv out into separate logic and integrate at a higher level
 def mlp(sizes, activation, output_activation=torch.nn.Identity, conv=False):
     layers = []
     if conv:
@@ -85,27 +86,44 @@ class MLPGaussianActor(Actor):
         loc = self._mlp(obs.float())
         return Normal(loc, torch.exp(self._log_scale))
 
+    def deterministic_action(self, obs):
+        return self._mlp(obs.float())
+
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act).sum(axis=-1)
 
 
 class MLPCritic(torch.nn.Module):
 
-    def __init__(self, obs_dim, hidden_sizes, activation, conv=False):
+    def __init__(self, obs_dim, hidden_sizes, activation, act_dim=None, conv=False):
         super().__init__()
-        self._mlp = mlp([obs_dim] + list(hidden_sizes) + [1], activation, conv=conv)
+        if act_dim:
+            self._obs_mlp = mlp([obs_dim, hidden_sizes[0]], activation, output_activation=activation)
+            self._act_mlp = mlp([act_dim, hidden_sizes[0]], activation, output_activation=activation)
+            self._mlp = mlp([2*hidden_sizes[0]] + list(hidden_sizes) + [1], activation)
+        else:
+            self._mlp = mlp([obs_dim] + list(hidden_sizes) + [1], activation, conv=conv)
 
-    def forward(self, obs):
+    def forward(self, obs, act=None):
+        if act:
+            obs_hidden = self._obs_mlp(obs.float())
+            act_hidden = self._act_mlp(act.float())
+            # TODO experiment with whether autodiff works through a view
+            combined = torch.cat((torch.flatten(obs_hidden), torch.flatten(act_hidden)), 0)
+            # TODO check whether torch.squeeze is actually needed
+            return self._mlp(combined)
         return torch.squeeze(self._mlp(obs.float()), -1)
 
 class MLPActorCritic(torch.nn.Module):
 
 
     def __init__(self, observation_space, action_space,
-                 hidden_sizes=(64,64), activation=torch.nn.Tanh, conv=False):
+                 hidden_sizes=(64,64), activation=torch.nn.Tanh, conv=False, deterministic=False, q_net=False):
         super().__init__()
 
         self._obs_dim = observation_space.shape[0]
+        self._q_net = q_net
+        self._deterministic = deterministic
         if isinstance(action_space, Discrete):
             self._act_dim = action_space.n
             self.pi = MLPCategoricalActor(self._obs_dim, self._act_dim, hidden_sizes, activation, conv=conv)
@@ -113,7 +131,7 @@ class MLPActorCritic(torch.nn.Module):
             self._act_dim = action_space.shape
             self.pi = MLPGaussianActor(self._obs_dim, self._act_dim, hidden_sizes, activation)
 
-        self.v = MLPCritic(self._obs_dim, hidden_sizes, activation, conv=conv)
+        self.v = MLPCritic(self._obs_dim, hidden_sizes, activation, act_dim=self._act_dim if q_net else None, conv=conv)
 
     def step(self, obs, device=None):
         obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
@@ -121,10 +139,10 @@ class MLPActorCritic(torch.nn.Module):
             dist = self.pi._distribution(obs)
             act = dist.sample()
             logp = self.pi._log_prob_from_distribution(dist, act)
-            val = self.v(obs)
+            val = self.v(obs, act=act if self._q_net else None)
         return act.cpu().numpy(), val.cpu().numpy(), logp.cpu().numpy()
 
     def act(self, obs):
         with torch.no_grad():
-            act = self.pi._distribution(obs).sample()
+            act = self.pi.deterministic_action(obs) if self._deterministic else self.pi._distribution(obs).sample()
             return act.cpu().numpy()
