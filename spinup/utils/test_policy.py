@@ -8,8 +8,7 @@ import zlib
 
 import torch
 import tensorflow as tf
-from spinup import EpochLogger
-from spinup.utils.logx import restore_tf_graph
+from spinup.utils.logx import EpochLogger, restore_tf_graph
 import gym.wrappers
 import numpy as np
 
@@ -125,13 +124,13 @@ def load_pytorch_policy(fpath, itr, deterministic=False, use_gpu=False):
     return get_action
 
 
-def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
+def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, logger=None, log_output=True):
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
         "page on Experiment Outputs for how to handle this situation."
 
-    logger = EpochLogger()
+    logger = logger if logger else EpochLogger()
     o = _eval_lazyframe(env.reset())
     r, d, ep_ret, ep_len, n = 0, False, 0, 0, 0
     while n < num_episodes:
@@ -147,14 +146,16 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            print('Episode %d \t EpRet %.3f \t EpLen %d'%(n, ep_ret, ep_len))
+            if log_output:
+                print('Episode %d \t EpRet %.3f \t EpLen %d'%(n, ep_ret, ep_len))
             o = _eval_lazyframe(env.reset())
             r, d, ep_ret, ep_len = 0, False, 0, 0
             n += 1
 
-    logger.log_tabular('EpRet', with_min_and_max=True)
-    logger.log_tabular('EpLen', average_only=True)
-    logger.dump_tabular()
+    if log_output:
+        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpLen', average_only=True)
+        logger.dump_tabular()
 
 
 if __name__ == '__main__':

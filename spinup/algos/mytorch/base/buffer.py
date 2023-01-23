@@ -42,6 +42,9 @@ class GAEBuffer:
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
+    def __len__(self):
+        return len(self.obs_buf)
+
     def store(self, obs, act, rew, val, logp, **kwargs):
         """
         Append one timestep of agent-environment interaction to the buffer.
@@ -112,6 +115,9 @@ class ReplayBuffer:
         self.ptr = 0
         self.size = size
 
+    def __len__(self):
+        return min(self.ptr, self.size)
+
     def store(self, obs, act, rew, next_obs, done, **kwargs):
         """
         Store a transition.
@@ -123,14 +129,17 @@ class ReplayBuffer:
         self.act_buf[idx] = act
         self.rew_buf[idx] = rew
         self.next_obs_buf[idx] = next_obs
-        self.done_buf[idx] = done
-        self.ptr = self.ptr + 1
+        self.done_buf[idx] = float(done)
+        self.ptr += 1
+
+    def finish_path(self, last_val=0):
+        pass
 
     def get(self, batch_size=100, device=None):
         """
         Returns a uniform sample of transitions.
         """
-        offset = min(self.ptr, self.size)
+        offset = len(self)
         assert offset > batch_size
         idx = np.random.choice(offset, batch_size, replace=False)
         data = dict(
