@@ -34,7 +34,6 @@ class DDPGAlgorithm(Algorithm):
             polyak=0.995,
             pi_lr=1e-3,
             q_lr=1e-3,
-            q_weight_decay=0.,
             batch_size=1e2,
             start_steps=1e4,
             update_after=1e3,
@@ -72,7 +71,7 @@ class DDPGAlgorithm(Algorithm):
         self.ac_target.to(self.device)
         self.q_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
-        self.q_optimizer = Adam(self.ac.v.parameters(), lr=q_lr, weight_decay=q_weight_decay)
+        self.q_optimizer = Adam(self.ac.v.parameters(), lr=q_lr)
         self.gamma = gamma
         self.polyak = polyak
         self.pi_lr = pi_lr
@@ -142,10 +141,10 @@ class DDPGAlgorithm(Algorithm):
                 q_grad_norms.append(torch.norm(p.grad))
             self.q_optimizer.step()
 
-            self.pi_optimizer.zero_grad()
             for p in self.ac.v.parameters():
                 p.requires_grad = False
 
+            self.pi_optimizer.zero_grad()
             pi_loss = self.compute_loss_pi(obs)
             pi_loss.backward()
             for p in self.ac.pi.parameters():
@@ -162,7 +161,7 @@ class DDPGAlgorithm(Algorithm):
 
             for (p_targ, p) in zip(self.ac_target.parameters(), self.ac.parameters()):
                 # Ignore constant parameters
-                if p.requires_grad == False:
+                if not p.requires_grad:
                     continue
                 p_targ.data.mul_(self.polyak)
                 p_targ.data.add_((1 - self.polyak) * p.data)
@@ -193,7 +192,6 @@ def ddpg(
         polyak=0.995,
         pi_lr=1e-3,
         q_lr=1e-3,
-        q_weight_decay=0.,
         batch_size=100,
         start_steps=1e4,
         update_after=1000,
@@ -260,8 +258,6 @@ def ddpg(
 
         q_lr (float): Learning rate for Q-networks.
 
-        q_weight_decay(float): L2 regularization coefficient for critic.
-
         batch_size (int): Minibatch size for SGD.
 
         start_steps (int): Number of steps for uniform-random action selection,
@@ -309,7 +305,6 @@ def ddpg(
         polyak=polyak,
         pi_lr=pi_lr,
         q_lr=q_lr,
-        q_weight_decay=q_weight_decay,
         batch_size=batch_size,
         start_steps=start_steps,
         update_after=update_after,
