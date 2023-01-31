@@ -155,6 +155,10 @@ class Algorithm(ABC):
                 next_obs, rew, done, _ = self.env.step(act)
                 ep_ret += rew
                 ep_len += 1
+
+
+                truncated = (ep_len >= self.max_ep_len)
+
                 # Note that the buffer could be a GAE buffer or a replay
                 # buffer. Each buffer has a different function signature, but
                 # also captures **kwargs so that we can dump all of the
@@ -167,13 +171,12 @@ class Algorithm(ABC):
                     val=val,
                     logp=logp,
                     next_obs=next_obs,
-                    done=done,
+                    done=False if truncated else done,
                 )
 
                 obs = self._eval_lazyframe(next_obs)
 
                 epoch_complete = (t == self.local_steps_per_epoch - 1)
-                truncated = (ep_len >= self.max_ep_len)
 
                 val = 0
                 if truncated or epoch_complete:
