@@ -14,7 +14,7 @@ def kaiming_uniform(grouped_params):
             torch.nn.init.uniform_(w.data, a=-3e-3, b=3e-3)
             torch.nn.init.uniform_(b.data, a=-3e-3, b=3e-3)
         else:
-            torch.nn.init.kaiming_uniform(w.data, mode="fan_in", nonlinearity="relu")
+            torch.nn.init.kaiming_uniform_(w.data, mode="fan_in", nonlinearity="relu")
             b.data.zero_()
 
 def orthogonal_init(grouped_params):
@@ -156,6 +156,7 @@ class MLPActorCritic(torch.nn.Module):
             conv=False,
             deterministic=False,
             q_net=False,
+            double_q=False,
             init=None,
     ):
         super().__init__()
@@ -187,6 +188,8 @@ class MLPActorCritic(torch.nn.Module):
             )
 
         self.v = MLPCritic(self._obs_dim, hidden_sizes, activation, act_dim=action_space.shape[0] if q_net else None, conv=conv)
+        if double_q:
+            self.v2 = MLPCritic(self._obs_dim, hidden_sizes, activation, act_dim=action_space.shape[0] if q_net else None, conv=conv)
 
     def step(self, obs, device=None):
         obs = torch.as_tensor(obs, dtype=torch.float32, device=device)[None, :]

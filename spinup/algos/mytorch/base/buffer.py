@@ -141,7 +141,8 @@ class ReplayBuffer:
         """
         offset = len(self)
         assert offset > batch_size
-        idx = np.random.choice(offset, batch_size, replace=False)
+        # idx = np.random.choice(offset, batch_size, replace=False)
+        idx = np.random.randint(0, offset, size=batch_size)
         data = dict(
             obs=self.obs_buf[idx],
             act=self.act_buf[idx],

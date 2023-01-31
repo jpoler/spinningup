@@ -23,6 +23,7 @@ from spinup.algos.mytorch.vpg.vpg import vpg as vpg_mytorch
 from spinup.algos.mytorch.trpo.trpo import trpo as trpo_mytorch
 from spinup.algos.mytorch.ppo.ppo import ppo as ppo_mytorch
 from spinup.algos.mytorch.ddpg.ddpg import ddpg as ddpg_mytorch
+from spinup.algos.mytorch.td3.td3 import td3 as td3_mytorch
 
 # Loggers
 from spinup.utils.logx import Logger, EpochLogger
