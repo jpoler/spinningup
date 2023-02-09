@@ -153,11 +153,12 @@ class TD3Algorithm(Algorithm):
             self.q2_optimizer.step()
 
             self.pi_optimizer.zero_grad()
-            for p in self.ac.v.parameters():
-                p.requires_grad = False
 
             if i % self.policy_delay != 0:
                 continue
+
+            for p in self.ac.v.parameters():
+                p.requires_grad = False
 
             pi_loss = self.compute_loss_pi(obs)
             pi_loss.backward()
