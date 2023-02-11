@@ -51,9 +51,9 @@ def mlp(sizes, activation, output_activation=torch.nn.Identity, conv=False, init
 
     seq = torch.nn.Sequential(*layers)
 
-    params = list(seq.parameters())
-    grouped_params = [params[i:i+2] for i in range(0, len(params), 2)]
-    init(grouped_params)
+    # params = list(seq.parameters())
+    # grouped_params = [params[i:i+2] for i in range(0, len(params), 2)]
+    # init(grouped_params)
 
     return seq
 
@@ -163,6 +163,7 @@ class MLPActorCritic(torch.nn.Module):
 
         self._obs_dim = observation_space.shape[0]
         self._q_net = q_net
+        self._double_q = double_q
         self._deterministic = deterministic
         self._action_low = torch.nn.Parameter(torch.as_tensor(action_space.low), requires_grad=False)
         self._action_high = torch.nn.Parameter(torch.as_tensor(action_space.high), requires_grad=False)
@@ -198,6 +199,8 @@ class MLPActorCritic(torch.nn.Module):
             act = dist.sample().clip(min=self._action_low, max=self._action_high)
             logp = self.pi._log_prob_from_distribution(dist, act)
             val = self.v(obs, act=act if self._q_net else None)
+            if self._double_q:
+                val = torch.minimum(val, self.v2(obs, act=act if self._q_net else None))
         return act.squeeze(0).cpu().numpy(), val.squeeze(0).cpu().numpy(), logp.squeeze(0).cpu().numpy()
 
     def act(self, obs):

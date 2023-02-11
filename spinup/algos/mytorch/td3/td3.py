@@ -9,6 +9,7 @@ import gym
 from spinup.algos.mytorch.base.actor_critic import kaiming_uniform, MLPActorCritic
 from spinup.algos.mytorch.base.algorithm import Algorithm
 from spinup.algos.mytorch.base.buffer import ReplayBuffer
+from spinup.algos.mytorch.base.debug import print_computation_graph
 from spinup.utils.logx import EpochLogger
 
 class TD3Algorithm(Algorithm):
@@ -62,7 +63,8 @@ class TD3Algorithm(Algorithm):
         self.ac_target = deepcopy(self.ac)
         self.ac.to(self.device)
         self.ac_target.to(self.device)
-        self.q_mse_loss = torch.nn.MSELoss()
+        self.q1_mse_loss = torch.nn.MSELoss()
+        self.q2_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
         self.q1_optimizer = Adam(self.ac.v.parameters(), lr=q_lr)
         self.q2_optimizer = Adam(self.ac.v2.parameters(), lr=q_lr)
@@ -81,7 +83,6 @@ class TD3Algorithm(Algorithm):
         self.policy_delay = policy_delay
         self.action_low = torch.as_tensor(self.env.action_space.low, device=self.device)
         self.action_high = torch.as_tensor(self.env.action_space.high, device=self.device)
-
 
         for p in self.ac_target.parameters():
             p.requires_grad = False
@@ -102,19 +103,22 @@ class TD3Algorithm(Algorithm):
     def compute_loss_q(self, obs, act, rew, next_obs, done):
         with torch.no_grad():
             next_act = self.ac_target.pi(next_obs, deterministic=True)
-            noise_mean = torch.zeros_like(next_act, device=self.device)
-            noise = torch.normal(noise_mean, std=self.target_noise).clip(min=-self.noise_clip, max=self.noise_clip).to(self.device)
+            noise = torch.normal(0, std=self.target_noise, size=next_act.shape).clip(min=-self.noise_clip, max=self.noise_clip).to(self.device)
             next_act_noisy = (next_act + noise).clip(min=self.action_low, max=self.action_high)
             target_pred_1 = self.ac_target.v(next_obs, next_act_noisy)
             target_pred_2 = self.ac_target.v2(next_obs, next_act_noisy)
             target_pred = torch.minimum(target_pred_1, target_pred_2)
+            target = rew + self.gamma * (1 - done) * target_pred
 
-        target = rew + self.gamma * (1 - done) * target_pred
         pred_1 = self.ac.v(obs, act)
         pred_2 = self.ac.v2(obs, act)
 
+        loss_1 = self.q1_mse_loss(pred_1, target)
+        loss_2 = self.q2_mse_loss(pred_2, target)
 
-        return self.q_mse_loss(pred_1, target) + self.q_mse_loss(pred_2, target)
+        loss_total = loss_1 + loss_2
+
+        return loss_total
 
     def compute_loss_pi(self, obs):
         act = self.ac.pi(obs, deterministic=True)
@@ -152,13 +156,17 @@ class TD3Algorithm(Algorithm):
             self.q1_optimizer.step()
             self.q2_optimizer.step()
 
-            self.pi_optimizer.zero_grad()
+            q_losses.append(q_loss)
 
             if i % self.policy_delay != 0:
                 continue
 
             for p in self.ac.v.parameters():
                 p.requires_grad = False
+            for p in self.ac.v2.parameters():
+                p.requires_grad = False
+
+            self.pi_optimizer.zero_grad()
 
             pi_loss = self.compute_loss_pi(obs)
             pi_loss.backward()
@@ -168,11 +176,12 @@ class TD3Algorithm(Algorithm):
 
             self.pi_optimizer.step()
 
+            pi_losses.append(pi_loss)
+
             for p in self.ac.v.parameters():
                 p.requires_grad = True
-
-            q_losses.append(q_loss)
-            pi_losses.append(pi_loss)
+            for p in self.ac.v2.parameters():
+                p.requires_grad = True
 
             for (p_targ, p) in zip(self.ac_target.parameters(), self.ac.parameters()):
                 # Ignore constant parameters
