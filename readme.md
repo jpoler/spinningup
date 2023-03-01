@@ -3,7 +3,7 @@
 | HalfCheetah-v3 | |
 | Hopper-v3 | |
 | Walker2d-v3 | |
-| Ant-v3 | |
+| Ant-v3 | <img src="https://user-images.githubusercontent.com/5551484/222028706-6fc0f261-78ef-4d7f-9d6d-2e0bf789e90e.gif" height="100" width="190") |
 | Humanoid-v1 | <img src="https://user-images.githubusercontent.com/5551484/222026106-e96b298c-1e05-44ad-838b-f88a2512b606.gif" height="100" width="190"> |
 
 
