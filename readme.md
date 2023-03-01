@@ -1,8 +1,8 @@
 | | SAC |
 | ---- | ---- |
-| HalfCheetah-v3 | |
-| Hopper-v3 | |
-| Walker2d-v3 | |
+| HalfCheetah-v3 |<img src="https://user-images.githubusercontent.com/5551484/222029328-529bdd1a-1195-428b-abc5-980a38fd71b5.gif" height="100" width="190"> |
+| Hopper-v3 | <img src="https://user-images.githubusercontent.com/5551484/222029418-76fd7cf7-e0fb-426e-ad34-52be618fb3e1.gif" height="100" width="190"> |
+| Walker2d-v3 | <img src="https://user-images.githubusercontent.com/5551484/222029501-0fa629e8-ce24-48d9-aef3-399028c214e8.gif" height="100" width="190"> |
 | Ant-v3 | <img src="https://user-images.githubusercontent.com/5551484/222028706-6fc0f261-78ef-4d7f-9d6d-2e0bf789e90e.gif" height="100" width="190"> |
 | Humanoid-v1 | <img src="https://user-images.githubusercontent.com/5551484/222026106-e96b298c-1e05-44ad-838b-f88a2512b606.gif" height="100" width="190"> |
 
