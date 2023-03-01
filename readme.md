@@ -1,3 +1,8 @@
+|SAC|
+:-----:|
+![sac_humanoid_v1](https://user-images.githubusercontent.com/5551484/222026106-e96b298c-1e05-44ad-838b-f88a2512b606.gif)
+
+
 **Status:** Maintenance (expect bug fixes and minor updates)
 
 Welcome to Spinning Up in Deep RL! 
