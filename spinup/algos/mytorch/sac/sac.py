@@ -34,8 +34,6 @@ class SACAlgorithm(Algorithm):
             use_gpu=False,
             **kwargs,
     ):
-        # TODO remove
-        torch.set_printoptions(profile="full")
 
         super().__init__(
             env_fn,
@@ -91,10 +89,6 @@ class SACAlgorithm(Algorithm):
         self.logger.log_tabular('GradNormV', average_only=True)
         self.logger.log_tabular('QActEntropy', with_min_and_max=True)
         self.logger.log_tabular('PiActEntropy', with_min_and_max=True)
-        self.logger.log_tabular('TargetPredNorm', with_min_and_max=True)
-        self.logger.log_tabular('LogpNextActNorm', with_min_and_max=True)
-        self.logger.log_tabular('PredNorm', with_min_and_max=True)
-        self.logger.log_tabular('LogpActNorm', with_min_and_max=True)
 
     def act(self, obs):
         if len(self.buf) < self.start_steps:
@@ -108,8 +102,6 @@ class SACAlgorithm(Algorithm):
             target_pred_1 = self.ac_target.v(next_obs, next_act)
             target_pred_2 = self.ac_target.v2(next_obs, next_act)
             target_pred = torch.minimum(target_pred_1, target_pred_2)
-            self.logger.store(TargetPredNorm=torch.norm(target_pred))
-            self.logger.store(LogpNextActNorm=torch.norm(-self.alpha*logp_next_act))
             target = rew + self.gamma * (1 - done) * (target_pred - self.alpha * logp_next_act)
 
         pred_1 = self.ac.v(obs, act)
@@ -120,54 +112,15 @@ class SACAlgorithm(Algorithm):
 
         loss_total = loss_1 + loss_2
 
-        if anomaly([
-                next_act,
-                logp_next_act,
-                target_pred_1,
-                target_pred_2,
-                target_pred,
-                target,
-                pred_1,
-                pred_2,
-                loss_1,
-                loss_2,
-                loss_total,
-        ]):
-        # if True:
-            print(f"next_act: {next_act}")
-            print(f"logp_next_act: {logp_next_act}")
-            print(f"target_pred_1: {target_pred_1}")
-            print(f"target_pred_2: {target_pred_2}")
-            print(f"target_pred: {target_pred}")
-            print(f"target: {target}")
-            print(f"pred_1: {pred_1}")
-            print(f"pred_2: {pred_2}")
-            print(f"loss_1: {loss_1}")
-            print(f"loss_2: {loss_2}")
-            print(f"loss_total: {loss_total}")
-
         self.logger.store(QActEntropy=-logp_next_act.mean().item())
         return loss_total
 
     def compute_loss_pi(self, obs):
         act, logp_act = self.ac.pi.sample_with_log_prob(obs)
-        # print(f"act: {act}")
-        # print(f"logp_act: {logp_act}")
         pred_1 = self.ac.v(obs, act)
         pred_2 = self.ac.v2(obs, act)
         pred = torch.minimum(pred_1, pred_2)
 
-        if anomaly([act, logp_act, pred_1, pred_2, pred]):
-        # if True:
-            print("\n")
-            print(f"act: {act}")
-            print(f"logp_act: {logp_act}")
-            print(f"pred_1: {pred_1}")
-            print(f"pred_2: {pred_2}")
-            print(f"pred: {pred}")
-
-        self.logger.store(PredNorm=torch.norm(pred))
-        self.logger.store(LogpActNorm=torch.norm(-self.alpha*logp_act))
         self.logger.store(PiActEntropy=-logp_act.mean().item())
         return (self.alpha * logp_act - pred).mean()
 
@@ -180,7 +133,6 @@ class SACAlgorithm(Algorithm):
         q_grad_norms = []
         q_losses = []
 
-        # TODO revert from q to v to avoid confusion
         for i in range(self.update_every):
             data = self.buf.get(batch_size=self.batch_size, device=self.device)
 
@@ -196,16 +148,8 @@ class SACAlgorithm(Algorithm):
             q_loss = self.compute_loss_q(obs, act, rew, next_obs, done)
             q_loss.backward()
             for p in self.ac.v.parameters():
-                if anomaly([p.data]):
-                    print(f"q1 {i} p.data: {p.data.shape}\n{p.data}")
-                if anomaly([p.grad]):
-                    print(f"q1 {i} p.grad: {p.grad.shape}\n{p.grad}")
                 q_grad_norms.append(torch.norm(p.grad))
             for p in self.ac.v2.parameters():
-                if anomaly([p.data]):
-                    print(f"q2 {i} p.data: {p.data.shape}\n{p.data}")
-                if anomaly([p.grad]):
-                    print(f"q2 {i} p.grad: {p.grad.shape}\n{p.grad}")
                 q_grad_norms.append(torch.norm(p.grad))
             self.q1_optimizer.step()
             self.q2_optimizer.step()
@@ -220,20 +164,10 @@ class SACAlgorithm(Algorithm):
             self.pi_optimizer.zero_grad()
 
             pi_loss = self.compute_loss_pi(obs)
-            if anomaly([pi_loss]):
-                print(f"pi_loss: {pi_loss}")
             pi_loss.backward()
             for i, p in enumerate(self.ac.pi.parameters()):
                 if p.grad is not None:
-                    # print(f"p norm: {torch.norm(p.grad)}")
-                    if anomaly([p.data]):
-                        print(f"{i} p.data: {p.data.shape}\n{p.data}")
-                    if anomaly([p.grad]):
-                        print(f"{i} p.grad: {p.grad.shape}\n{p.grad}")
                     pi_grad_norms.append(torch.norm(p.grad))
-
-            # total_norm = sum(torch.norm(p.data) for p in self.ac.pi.parameters())
-            # print(f"p norm: {total_norm}")
 
             self.pi_optimizer.step()
 
@@ -389,8 +323,6 @@ def sac(
     logger_kwargs = logger_kwargs or {}
 
     saved_config = locals()
-
-    print(f"steps_per_epoch 1: {steps_per_epoch}")
 
     algo = SACAlgorithm(
         env_fn=env_fn,

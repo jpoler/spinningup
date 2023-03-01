@@ -20,36 +20,19 @@ class TanhNormal(Normal):
     def sample(self, sample_shape=torch.Size()):
         sample = super().sample(sample_shape=sample_shape).clip(min=self._float_min, max=self._float_max)
         out = self._tan_scale * torch.tanh(sample)
-        # print(f"sample: {out}")
         return out
 
     def rsample(self, sample_shape=torch.Size()):
         rsample = super().rsample(sample_shape=sample_shape).clip(min=self._float_min, max=self._float_max)
         out = self._tan_scale * torch.tanh(rsample)
-        # print(f"sample: {rsample}")
         return out
 
     def log_prob(self, value):
         rescaled_value = value / self._tan_scale
         gaussian_value = torch.atanh(rescaled_value)
-        # print(f"value: {gaussian_value}")
         gaussian_log_prob = super().log_prob(gaussian_value)
         tanh_log_prob = torch.log(1 - torch.tanh(gaussian_value)**2)
         logp = gaussian_log_prob - tanh_log_prob
-        # print(f"guassian log_prob: {gaussian_log_prob}\ntanh_log_prob: {tanh_log_prob}\nlogp: {logp}")
-        tiny_logp = (logp < -1e10).any()
-        high_entropy = (-logp.mean().item() > 5e2)
-        if anomaly([value, rescaled_value, gaussian_value, gaussian_log_prob, tanh_log_prob, logp]) or tiny_logp or high_entropy:
-            print("\n")
-            print(f"mean: {self.mean}")
-            print(f"stddev: {self.stddev}")
-            print(f"self._tan_scale: {self._tan_scale}")
-            print(f"value: {value}")
-            print(f"rescaled_value: {rescaled_value}")
-            print(f"guassian_value isnan: {gaussian_value}")
-            print(f"guassian_log_prob isnan: {gaussian_log_prob}")
-            print(f"tanh_log_prob isnan: {tanh_log_prob}")
-            print(f"logp isnan: {logp}")
         return logp
 
 
@@ -65,7 +48,6 @@ def kaiming_uniform(grouped_params):
 def orthogonal_init(grouped_params):
     for i, (w, b) in enumerate(grouped_params):
         gain = math.sqrt(2.)
-        print(w.shape)
         if i == len(grouped_params) - 1 and w.shape[0] == 1:
             gain = 1.
         elif i == len(grouped_params) - 1:
@@ -147,30 +129,10 @@ class MLPCategoricalActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
 
-def print_norm(name):
-    def inner(module, input, output):
-        nan_mask = torch.isnan(output)
-        if nan_mask.any():
-            torch.set_printoptions(profile="full")
-            idx = nan_mask.nonzero()[:, 0].unique(sorted=True)
-            print(f"{name} input: {input[0].shape}\n{input[0][idx]}\noutput: {output.shape}\n{output[idx]}")
-            for i, p in enumerate(module.parameters()):
-                print(f"{name} {i} {p.data.shape}\n{p.data}")
-            torch.set_printoptions(profile="default")
-        # print(f"{len(input)} {input[0].shape}")
-        # print(f"{len(output)} {output[0].shape}")
-        # print("input", type(input))
-        # print("output", type(output))
-        # in_norm = torch.norm(input[0])
-        # out_norm = torch.norm(output)
-        # print(f"{name} {module}: out_norm: {out_norm}")
-    return inner
-
 class MLPGaussianActor(Actor):
 
     # TODO fix anything that assumes scale has a default (vpg, trpo, ppo, ddpg?, td3?)
     def __init__(self, obs_dim, act_dim, act_scale, hidden_sizes, activation, output_activation=torch.nn.Tanh, scale=None, init=None):
-        # torch.autograd.set_detect_anomaly(True)
         super().__init__()
         self._loc_dim = torch.prod(torch.as_tensor(act_dim)).item()
         finfo = torch.finfo(torch.float32)
@@ -181,7 +143,6 @@ class MLPGaussianActor(Actor):
         self._log_std_min = np.log(1e-3)
         self._log_std_max = np.log(float_max)
         self._act_scale = torch.nn.Parameter(act_scale, requires_grad=False)
-        print(f"act scale: {self._act_scale}")
 
         if scale:
             log_scale = np.log(scale) if scale else -0.5
@@ -196,11 +157,6 @@ class MLPGaussianActor(Actor):
             init=init,
         )
 
-        # for name, module in self._mlp.named_modules():
-        #     if not isinstance(module, torch.nn.Sequential):
-        #         module.register_forward_hook(print_norm(name))
-
-
     def _deterministic_action(self, obs):
         return self._mlp(obs.float())
 
@@ -209,19 +165,13 @@ class MLPGaussianActor(Actor):
             loc = self._mlp(obs.float())
             scale = torch.exp(self._log_scale)
         else:
-            # obs_norm = torch.norm(obs.float())
             out = self._mlp(obs.float())
             loc = out[..., :self._loc_dim]
-            # loc_norm = torch.norm(loc)
             loc = loc.clip(min=self._loc_min, max=self._loc_max)
             log_scale = out[..., self._loc_dim:]
-            # log_scale_norm = torch.norm(log_scale)
             log_scale = log_scale.clip(min=self._log_std_min, max=self._log_std_max)
             scale = torch.exp(log_scale)
-            # scale_norm = torch.norm(scale)
-            # print(f"obs_norm: {obs_norm}\tloc_norm: {loc_norm}\tlog_scale_norm: {log_scale_norm}\tscale_norm: {scale_norm}")
-        # print(f"clip min: {self._log_std_min}, clip_max: {self._log_std_max}")
-        # print(f"loc: {loc}\nlog_scale: {log_scale}\nscale: {scale}")
+
         return TanhNormal(loc, scale, tan_scale=self._act_scale)
 
     def _log_prob_from_distribution(self, pi, act):
@@ -249,7 +199,6 @@ class MLPCritic(torch.nn.Module):
         return torch.squeeze(self._mlp(obs.float()), -1)
 
 class MLPActorCritic(torch.nn.Module):
-
 
     def __init__(
             self,

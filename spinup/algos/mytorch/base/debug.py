@@ -1,6 +1,5 @@
 import torch
 
-
 def print_computation_graph(root, indent=0):
     if not root:
         return
