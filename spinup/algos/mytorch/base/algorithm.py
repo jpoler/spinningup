@@ -48,6 +48,7 @@ class Algorithm(ABC):
         self.epochs = epochs
         self.max_ep_len = max_ep_len
         # self.local_steps_per_epoch = int(steps_per_epoch / num_procs())
+        print(f"steps_per_epoch 2: {steps_per_epoch}")
         self.local_steps_per_epoch = steps_per_epoch
 
         self.buf = buf_fn(

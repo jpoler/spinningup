@@ -1,3 +1,5 @@
+import torch
+
 
 def print_computation_graph(root, indent=0):
     if not root:
@@ -8,3 +10,6 @@ def print_computation_graph(root, indent=0):
         if hasattr(fn, "variable"):
             print(f"{prefix}  var: {fn.variable.shape}")
         print_computation_graph(fn, indent=indent + 1)
+
+def anomaly(xs):
+    return any(torch.isinf(x).any() or torch.isnan(x).any() for x in xs)
