@@ -132,7 +132,7 @@ class MLPCategoricalActor(Actor):
 class MLPGaussianActor(Actor):
 
     # TODO fix anything that assumes scale has a default (vpg, trpo, ppo, ddpg?, td3?)
-    def __init__(self, obs_dim, act_dim, act_scale, hidden_sizes, activation, output_activation=torch.nn.Tanh, scale=None, init=None):
+    def __init__(self, obs_dim, act_dim, act_scale, hidden_sizes, activation, scale=None, init=None):
         super().__init__()
         self._loc_dim = torch.prod(torch.as_tensor(act_dim)).item()
         finfo = torch.finfo(torch.float32)
@@ -145,7 +145,7 @@ class MLPGaussianActor(Actor):
         self._act_scale = torch.nn.Parameter(act_scale, requires_grad=False)
 
         if scale:
-            log_scale = np.log(scale) if scale else -0.5
+            log_scale = np.log(scale)
             log_scale_tensor = log_scale * np.ones(self._loc_dim, dtype=np.float32)
             self._log_scale = torch.nn.Parameter(torch.as_tensor(log_scale_tensor), requires_grad=False)
         else:
@@ -153,7 +153,7 @@ class MLPGaussianActor(Actor):
         self._mlp = mlp(
             [obs_dim] + list(hidden_sizes) + [self._loc_dim if scale else 2*self._loc_dim],
             activation,
-            output_activation=output_activation,
+            output_activation=torch.nn.Identity,
             init=init,
         )
 
@@ -239,8 +239,8 @@ class MLPActorCritic(torch.nn.Module):
                 torch.as_tensor(action_space.high),
                 hidden_sizes,
                 activation,
-                # TODO plumb
-                output_activation=torch.nn.Identity,
+                # # TODO plumb
+                # output_activation=torch.nn.Identity,
                 scale=actor_gaussian_noise,
                 init=init,
             )

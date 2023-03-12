@@ -39,7 +39,12 @@ class PPOAlgorithm(Algorithm):
         self.use_gpu = use_gpu
         self.device = torch.device("cuda:0" if self.use_gpu else "cpu")
         conv = is_atari_env(self.env)
-        self.ac = actor_critic(self.env.observation_space, self.env.action_space, conv=conv, **ac_kwargs)
+        self.ac = actor_critic(
+            self.env.observation_space,
+            self.env.action_space,
+            conv=conv,
+            **ac_kwargs,
+        )
         self.ac.to(self.device)
         self.v_mse_loss = torch.nn.MSELoss()
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
@@ -129,7 +134,8 @@ class PPOAlgorithm(Algorithm):
 
                 pi_loss.backward()
                 for p in self.ac.pi.parameters():
-                    pi_grad_norms.append(torch.norm(p.grad))
+                    if p.grad is not None:
+                        pi_grad_norms.append(torch.norm(p.grad))
                 self.pi_optimizer.step()
 
                 with torch.no_grad():

@@ -100,8 +100,9 @@ class Algorithm(ABC):
         self.logger.log_tabular('Vals', with_min_and_max=True)
         for i in range(self.env.action_space.shape[0]):
             self.logger.log_tabular(f'Action_{i}', with_min_and_max=True)
-        for i in range(self.env.action_space.shape[0]):
-            self.logger.log_tabular(f'TrainAction_{i}', with_min_and_max=True)
+        if self.num_test_episodes is not None:
+            for i in range(self.env.action_space.shape[0]):
+                self.logger.log_tabular(f'TrainAction_{i}', with_min_and_max=True)
         self.logger.log_tabular('Time', time.time()-start_time)
 
         self.log_epoch()
@@ -150,7 +151,7 @@ class Algorithm(ABC):
                     print(f"\repoch: ({epoch + 1}/{self.epochs}) steps: ({t+1}/{self.local_steps_per_epoch})")
                 act, val, logp = self.act(obs)
                 self.logger.store(Vals=val)
-                self._log_action(act)
+                self._log_action(act, train=self.num_test_episodes is not None)
                 next_obs, rew, done, _ = self.env.step(act)
                 ep_ret += rew
                 ep_len += 1
