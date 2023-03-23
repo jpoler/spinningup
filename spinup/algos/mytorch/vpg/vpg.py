@@ -55,6 +55,8 @@ class VPGAlgorithm(Algorithm):
         self.logger.log_tabular('GradNormPi', average_only=True)
         self.logger.log_tabular('GradNormV', average_only=True)
         self.logger.log_tabular('Entropy', average_only=True)
+        self.logger.log_tabular('KL', average_only=True)
+        self.logger.log_tabular('Advantage', average_only=True)
 
     def act(self, obs):
         return self.ac.step(obs, device=self.device)
@@ -65,7 +67,7 @@ class VPGAlgorithm(Algorithm):
         kl = (logp_old - logp).mean().item()
         entropy = dist.entropy().mean().item()
 
-        self.logger.store(KL=kl, Entropy=entropy)
+        self.logger.store(KL=kl, Entropy=entropy, Advantage=adv.mean().item())
         return -(logp * adv).mean()
 
     def compute_loss_v(self, obs, ret):
@@ -89,28 +91,33 @@ class VPGAlgorithm(Algorithm):
         v_grad_norms = []
         v_losses = []
 
+        permutation = torch.randperm(n_steps)
+        for j in range(0, n_steps, batch_size):
+            idx = permutation[j:j+batch_size]
+            obs, act, ret, adv, logp_old = obs_all[idx], act_all[idx], ret_all[idx], adv_all[idx], logp_old_all[idx]
+
+            self.ac.pi.zero_grad()
+            pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
+            pi_loss.backward()
+            pi_grad_norm = 0
+            for p in self.ac.pi.parameters():
+                if p.grad is not None:
+                    pi_grad_norms.append(torch.norm(p.grad))
+            self.pi_optimizer.step()
+            pi_losses.append(pi_loss)
+
         for _ in range(self.train_iters):
             permutation = torch.randperm(n_steps)
             for j in range(0, n_steps, batch_size):
                 idx = permutation[j:j+batch_size]
                 obs, act, ret, adv, logp_old = obs_all[idx], act_all[idx], ret_all[idx], adv_all[idx], logp_old_all[idx]
 
-                self.ac.pi.zero_grad()
                 self.ac.v.zero_grad()
-                pi_loss = self.compute_loss_pi(obs, act, adv, logp_old)
-                pi_loss.backward()
-                pi_grad_norm = 0
-                for p in self.ac.pi.parameters():
-                    pi_grad_norms.append(torch.norm(p.grad))
-                self.pi_optimizer.step()
-
                 v_loss = self.compute_loss_v(obs, ret)
                 v_loss.backward()
                 for p in self.ac.v.parameters():
                     v_grad_norms.append(torch.norm(p.grad))
                 self.vf_optimizer.step()
-
-                pi_losses.append(pi_loss)
                 v_losses.append(v_loss)
 
         if len(pi_losses) > 0:
