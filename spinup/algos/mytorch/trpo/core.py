@@ -46,10 +46,10 @@ def compute_direction(obs, act, adv, pi_loss_g, actor_old, actor_new, cg_iters, 
     kl = average_kl(pi_old, pi_new)
 
     def Hx(x):
-        grads = torch.autograd.grad(kl, actor_new.parameters(), create_graph=True)
+        grads = torch.autograd.grad(kl, actor_new.gradient_parameters(), create_graph=True)
         g = torch.nn.utils.parameters_to_vector(grads)
         g_dot_x = torch.dot(g, x)
-        grads = [g.contiguous() for g in torch.autograd.grad(g_dot_x, actor_new.parameters(), retain_graph=True)]
+        grads = [g.contiguous() for g in torch.autograd.grad(g_dot_x, actor_new.gradient_parameters(), retain_graph=True)]
         return damping_coeff*x + torch.nn.utils.parameters_to_vector(grads)
 
     x_hat = conjugate_gradients(Hx, torch.zeros_like(pi_loss_g), pi_loss_g, cg_iters, eps)
@@ -59,11 +59,11 @@ def compute_direction(obs, act, adv, pi_loss_g, actor_old, actor_new, cg_iters, 
 
 def line_search(obs, act, adv, d, backtrack_iters, backtrack_coeff, delta, actor_old, actor_new):
     with torch.no_grad():
-        theta_old = torch.nn.utils.parameters_to_vector(actor_old.parameters())
+        theta_old = torch.nn.utils.parameters_to_vector(actor_old.gradient_parameters())
         pi_old, logp_old = actor_old(obs, act)
         for i in range(backtrack_iters):
             theta_new = theta_old + (backtrack_coeff**i) * d
-            torch.nn.utils.vector_to_parameters(theta_new, actor_new.parameters())
+            torch.nn.utils.vector_to_parameters(theta_new, actor_new.gradient_parameters())
             pi_new, logp_new = actor_new(obs, act)
             akl = average_kl(pi_old, pi_new)
             surrogate_adv = surrogate_advantage(logp_old, logp_new, adv)

@@ -177,6 +177,9 @@ class MLPGaussianActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act).sum(axis=-1)
 
+    def gradient_parameters(self):
+        return iter(p for p in self.parameters() if p.requires_grad)
+
 
 class MLPCritic(torch.nn.Module):
 

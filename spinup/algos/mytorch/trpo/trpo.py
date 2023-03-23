@@ -85,7 +85,7 @@ class TRPOAlgorithm(Algorithm):
         pi_new, logp_new = self.ac.pi(obs, act)
         entropy = pi_new.entropy().mean().item()
         pi_loss = core.surrogate_advantage(logp_old, logp_new, adv)
-        grads = torch.autograd.grad(pi_loss, self.ac.pi.parameters())
+        grads = torch.autograd.grad(pi_loss, self.ac.pi.gradient_parameters())
         pi_loss_g = torch.nn.utils.parameters_to_vector(grads)
         pi_grad_norm = torch.norm(pi_loss_g)
         x_hat, x_hat_coeff = core.compute_direction(
