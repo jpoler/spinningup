@@ -153,25 +153,25 @@ class MLPGaussianActor(Actor):
         self._mlp = mlp(
             [obs_dim] + list(hidden_sizes) + [self._loc_dim if scale else 2*self._loc_dim],
             activation,
-            output_activation=torch.nn.Identity,
+            output_activation=torch.nn.Tanh if scale else torch.nn.Identity,
             init=init,
         )
 
     def _deterministic_action(self, obs):
-        return self._mlp(obs.float())
+        return self._act_scale * self._mlp(obs.float())
 
     def _distribution(self, obs):
-        if self._log_scale:
-            loc = self._mlp(obs.float())
-            scale = torch.exp(self._log_scale)
-        else:
-            out = self._mlp(obs.float())
-            loc = out[..., :self._loc_dim]
-            loc = loc.clip(min=self._loc_min, max=self._loc_max)
-            log_scale = out[..., self._loc_dim:]
-            log_scale = log_scale.clip(min=self._log_std_min, max=self._log_std_max)
-            scale = torch.exp(log_scale)
+        if self._log_scale is not None:
+            loc = self._act_scale * self._mlp(obs.float())
+            scale = self._act_scale * torch.exp(self._log_scale)
+            return Normal(loc, scale)
 
+        out = self._mlp(obs.float())
+        loc = out[..., :self._loc_dim]
+        loc = loc.clip(min=self._loc_min, max=self._loc_max)
+        log_scale = out[..., self._loc_dim:]
+        log_scale = log_scale.clip(min=self._log_std_min, max=self._log_std_max)
+        scale = torch.exp(log_scale)
         return TanhNormal(loc, scale, tan_scale=self._act_scale)
 
     def _log_prob_from_distribution(self, pi, act):
